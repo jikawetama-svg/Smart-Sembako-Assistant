@@ -1,0 +1,346 @@
+{
+    "project": "Smart Sembako Assistant",
+    "timezone": "UTC+07:00",
+    "entries": [
+        {
+            "date": "2026-04-10",
+            "version": "4.0.0",
+            "title": "Phase 4.0: Complete UI Overhaul - Modern Fluent Design",
+            "summary": [
+                "COMPLETE UI REDESIGN: Rombak total UI dari nol dengan Design System modern berbasis Fluent Design Windows 11.",
+                "MODERN DESIGN SYSTEM: Color palette, spacing, typography, shadows, dan border radius yang konsisten.",
+                "DRAWER MENU: Navigasi yang lebih clean dengan sections yang jelas (Menu, Bot Control, Quick Actions).",
+                "DASHBOARD V2: Status cards, quick insights dengan color-coded metrics, auto-refresh indicator.",
+                "STOCK MONITORING V2: Quick stats bar dengan badges, modern filters, improved DataGrid.",
+                "LOGS VIEW V2: Advanced filters, summary stats dengan color-coded badges, export CSV, clear old logs."
+            ],
+            "details": [
+                "MainWindow.xaml: Complete redesign dengan Drawer Menu (280px) + Content Area",
+                "MainWindow.xaml: Design System tokens (Primary, Success, Warning, Error colors)",
+                "MainWindow.xaml: Card styles, Button styles (Primary, Secondary, Icon), Input styles",
+                "MainWindow.xaml: Bot Control Panel dengan icon buttons (Start/Stop/Restart)",
+                "MainWindow.xaml: Quick Actions section dengan 4 action buttons",
+                "MainWindow.xaml: Top Bar dengan page title dan live datetime",
+                "MainWindow.xaml.cs: Integrated BotController dengan event-based UI updates",
+                "DashboardView.xaml: Complete redesign dengan modern card-based layout",
+                "DashboardView.xaml: Status cards (Bot, AI, DB, Memory) dengan icons",
+                "DashboardView.xaml: Quick Insights cards (Revenue, Profit, Critical Stock) dengan color-coded backgrounds",
+                "DashboardView.xaml: Auto-refresh indicator dengan last refresh timestamp",
+                "StockMonitoringView.xaml: Complete redesign dengan Quick Stats bar",
+                "StockMonitoringView.xaml: Quick Stats badges (🟢Aman 🟡Rendah 🔴Habis ⚠️Minus)",
+                "StockMonitoringView.xaml: Modern search box dan filter buttons",
+                "StockMonitoringView.xaml: Improved DataGrid dengan styled headers dan cells",
+                "LogsView.xaml: Complete redesign dengan advanced filters",
+                "LogsView.xaml: Summary stats dengan color-coded badges (Info, Warning, Error)",
+                "LogsView.xaml: Level dan Category filter dropdowns",
+                "LogsView.xaml: Export CSV dan Clear Old Logs (>30 hari) buttons",
+                "LogsView.xaml: Color-coded log levels di DataGrid",
+                "All Views: Consistent design system dengan reusable styles",
+                "All Views: Proper spacing (8px grid system)",
+                "All Views: Modern shadows dan border radius",
+                "Backend: All existing services preserved dan terintegrasi dengan UI baru",
+                "Build verification: dotnet build --configuration Release SUCCESS, 0 errors",
+                "UI Status: Phase 4.0 COMPLETE ✅ - RELEASED v4.0.0"
+            ],
+            "status": "released"
+        },
+        {
+            "date": "2026-04-10",
+            "version": "3.1.0",
+            "title": "Phase 3.3: AI Fallback & Custom API Key Settings",
+            "summary": [
+                "AI PRIMARY (Groq): Settings section lengkap dengan API Key Show/Hide dan model dropdown.",
+                "AI FALLBACK (Gemini): Settings section dengan enable/disable checkbox dan test connection.",
+                "AI BEHAVIOR: Auto-switch, cache, retry count, dan auto recovery settings.",
+                "Test Connections: Individual test buttons untuk Groq & Gemini API."
+            ],
+            "details": [
+                "SettingsView.xaml: Redesigned AI settings dengan AI PRIMARY & AI FALLBACK sections",
+                "SettingsView.xaml: Added model dropdowns untuk Groq (4 models) & Gemini (4 models)",
+                "SettingsView.xaml: Added Show/Hide buttons untuk API keys",
+                "SettingsView.xaml: Added Test Connection buttons untuk Groq & Gemini",
+                "SettingsView.xaml: Added AI BEHAVIOR section (Auto-switch, Cache, Retry, Recovery)",
+                "SettingsView.xaml: Added Enable Fallback checkbox untuk enable/disable Gemini",
+                "SettingsView.xaml.cs: Implemented BtnShowGroqKey_Click & BtnShowGeminiKey_Click",
+                "SettingsView.xaml.cs: Implemented BtnTestGroq_Click dengan GroqService test",
+                "SettingsView.xaml.cs: Implemented BtnTestGemini_Click dengan HTTP API test",
+                "SettingsView.xaml.cs: Implemented ChkEnableFallback_Changed untuk enable/disable controls",
+                "SettingsView.xaml.cs: Updated LoadSettings() & SaveSettings() untuk ComboBox models",
+                "Build verification: dotnet build --configuration Release SUCCESS, 0 errors",
+                "UI Status: Phase 3.3 COMPLETE ✅"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-10",
+            "version": "3.0.0",
+            "title": "Phase 3.2: Complete UI Overhaul - Drawer Menu, Bot Control & Dashboard Polish",
+            "summary": [
+                "DRAWER MENU: Implementasi drawer menu modern dengan navigation, quick actions, dan bot control panel.",
+                "BOT CONTROL SYSTEM: BotController class dengan state machine, uptime tracking, dan auto-update UI.",
+                "QUICK ACTIONS: 4 quick actions dengan functionality lengkap (Omzet, Stok Minus, Restock, Test Connections).",
+                "DASHBOARD POLISH: Auto-refresh 30 detik, status cards yang lebih informatif.",
+                "STOCK MONITORING: Quick stats bar (Aman/Rendah/Habis/Minus) dengan filter yang lebih baik.",
+                "LOGS VIEW: Filter by level/category, export CSV, dan stats summary."
+            ],
+            "details": [
+                "NEW FILE: BotController.cs - Bot lifecycle management dengan state machine (Stopped/Starting/Running/Stopping/Error)",
+                "MainWindow.xaml: Complete redesign - Drawer menu dengan navigation, bot control, quick actions",
+                "MainWindow.xaml: Added Bot Control Panel (Start/Stop/Restart) dengan status indicator",
+                "MainWindow.xaml: Added Quick Actions panel dengan 4 buttons (Omzet, Stok Minus, Restock, Test Connections)",
+                "MainWindow.xaml: Added Top Bar dengan page title & datetime display",
+                "MainWindow.xaml.cs: Integrated BotController dengan event-based UI updates",
+                "MainWindow.xaml.cs: Added SetupUptimeTimer() untuk live uptime counter",
+                "MainWindow.xaml.cs: Added UpdateBotUI() untuk auto-update UI berdasarkan bot state",
+                "MainWindow.xaml.cs: Added BtnRestartBot_Click dengan confirmation dialog",
+                "MainWindow.xaml.cs: Added QuickAction_Omzet_Click - Tampilkan omzet/profit/transaksi hari ini",
+                "MainWindow.xaml.cs: Added QuickAction_StokMinus_Click - Cek produk dengan stok minus",
+                "MainWindow.xaml.cs: Added QuickAction_Restock_Click - Rekomendasi produk stok rendah",
+                "MainWindow.xaml.cs: Added QuickAction_TestConnections_Click - Test semua koneksi",
+                "DashboardView.xaml.cs: Added auto-refresh timer (30 detik)",
+                "DashboardView.xaml.cs: Added RefreshDataAsync() untuk update data tanpa reload penuh",
+                "StockMonitoringView.xaml: Added Quick Stats bar (🟢Aman 🟡Rendah 🔴Habis ⚠️Minus)",
+                "StockMonitoringView.xaml.cs: Added UpdateQuickStats() method",
+                "StockMonitoringView.xaml: Improved filter layout",
+                "LogsView.xaml: Sudah ada filter by level/category + export CSV",
+                "LogsView.xaml: Stats summary (Total/Errors/Warnings)",
+                "Build verification: dotnet build --configuration Release SUCCESS, 0 errors",
+                "UI Status: Phase 3.2 COMPLETE ✅ - RELEASED v3.0.0"
+            ],
+            "status": "released"
+        },
+        {
+            "date": "2026-04-10",
+            "version": "2.4.0",
+            "title": "Critical Fix: Inventory Count Logic - dari ADD ke SET (Target Stock)",
+            "summary": [
+                "CRITICAL FIX: Mengubah konsep /inventory dari ADD (tambah stok) menjadi SET (set target stok) sesuai dengan cara kerja Aronium Quick Inventory.",
+                "LOGIC FIX: selisih = target - currentStock (bukan currentStock + input), mencegah stok meledak/berlipat.",
+                "UI IMPROVEMENT: Confirmation message sekarang menampilkan 'Stok Target' dan 'Selisih' untuk kejelasan user."
+            ],
+            "details": [
+                "CRITICAL BUG: Sebelumnya /inventory 21 dengan stok 20 → jadi 41 (salah!), sekarang → jadi 21 (benar)",
+                "TelegramBotService.cs - HandleInventoryCommandAsync(): Changed logic dari ADD ke SET, qty sekarang adalah TARGET stok akhir",
+                "TelegramBotService.cs - HandleInventoryCommandAsync(): Added 'Stok Target' dan 'Selisih' ke confirmation message",
+                "TelegramBotService.cs - HandleBulkInventoryCommandAsync(): Updated bulk inventory logic untuk SET mode",
+                "TelegramBotService.cs - HandleCallbackQueryAsync(): Updated inventory_confirm callback untuk logic SET",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Changed logic - parameter 'quantity' sekarang adalah TARGET, bukan perubahan",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Quantity untuk DocumentItem = selisih (target - currentStock)",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): ExpectedQuantity = currentStock (stok saat ini)",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): newStock = target (bukan currentStock + quantity)",
+                "CONCEPT CHANGE: /inventory sekarang berfungsi seperti Aronium Quick Inventory - SET stok akhir",
+                "Verification: dotnet build --configuration Release SUCCESS, 0 errors"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-09",
+            "version": "2.3.2",
+            "title": "Inventory Count Aronium Compatibility Fix",
+            "summary": [
+                "INVENTORY MESSAGE: Fixed callback message untuk qty=0 sekarang menampilkan '🔄 RESET STOK' bukan '📉 STOK DIKURANGI'.",
+                "INVENTORY DOCUMENT FORMAT: Fixed dokumen Inventory Count agar sesuai dengan format Aronium - menghilangkan ikon peringatan dan tombol 'Fix' di Aronium."
+            ],
+            "details": [
+                "TelegramBotService.cs - HandleCallbackQueryAsync(): Fixed inventory_confirm callback message untuk qty=0 menampilkan '🔄 RESET STOK' dengan detail 'Aksi: Reset stok ke 0'",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Added InternalNote field dengan format 'Quick inventory [tanggal]' sesuai Aronium",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Added PriceBeforeTax, Price, ProductCost fields dengan data dari tabel Product",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Fixed ExpectedQuantity sekarang diisi dengan currentStock (bukan 0)",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Fixed Quantity field sekarang diisi dengan actualQuantity (stok akhir yang diharapkan)",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Added Total calculation = Quantity * Price",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Document format sekarang 100% compatible dengan Aronium Quick Inventory",
+                "Verification: dotnet build --configuration Release SUCCESS, 0 errors"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-09",
+            "version": "2.3.1",
+            "title": "Minor Fixes: Bulk Inventory Parser & Inventory Reset Logic",
+            "summary": [
+                "BULK INVENTORY PARSER: Improved parser untuk handle format 'produk nama qty' dengan lebih robust, termasuk produk dengan karakter khusus seperti '@'.",
+                "INVENTORY RESET LOGIC: Fixed logic saat qty=0 untuk inventory count - stok minus (misal -60) sekarang benar-benar di-reset ke 0, bukan tetap -60.",
+                "INVENTORY MESSAGE: Improved confirmation message untuk inventory reset yang menampilkan 'Stok Saat Ini: -60 → Stok Baru: 0 (Reset ke 0)'."
+            ],
+            "details": [
+                "TelegramBotService.cs - HandleBulkInventoryCommandAsync(): Improved parser dengan loop dari belakang untuk menemukan angka qty pertama yang valid",
+                "TelegramBotService.cs - HandleInventoryCommandAsync(): Added logic khusus untuk qty=0 (reset stok) dengan message yang jelas",
+                "TelegramBotService.cs - HandleBulkInventoryCommandAsync(): Updated confirmation message untuk menampilkan perubahan yang lebih informatif saat qty=0",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Fixed newStock calculation - qty=0 sekarang set stok ke 0, bukan currentStock + 0",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): Added quantityChange calculation untuk DocumentItem yang benar saat reset stok",
+                "Verification: dotnet build --configuration Release SUCCESS, 0 errors"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-09",
+            "version": "2.3.0",
+            "title": "Phase 3 Complete: Role-Based Access, Anti-Hallucination, History & Recommendations",
+            "summary": [
+                "ROLE-BASED ACCESS: Implementasi sistem Owner vs Kasir dengan konfigurasi `OwnerChatIds` dan `KasirChatIds`.",
+                "ANTI-HALLUCINATION: Prompt engineering ketat agar AI tidak mengarang data, angka, atau riwayat.",
+                "HISTORY TRACKING: Fitur `/riwayat_restock` dan `/riwayat_inventory` untuk audit trail.",
+                "AUTO-RECOMMENDATION: Fitur `/rekomendasi_restock` untuk saran restock otomatis berdasarkan stok rendah.",
+                "CRITICAL STOCK NOTIFICATION: Fitur `/notifikasi_stok` untuk cek produk habis/minus.",
+                "BULK RESTOCK: Support multiple produk dalam satu command (`/restock produk1 qty1 harga1, produk2 qty2 harga2`).",
+                "MINOR FIXES: Perbaikan parser restock, inventory qty=0, dan DocumentTypeId mapping di semua query."
+            ],
+            "details": [
+                "TelegramBotService.cs: Added `IsOwner()`, `IsKasir()`, `GetUserRole()` methods",
+                "TelegramBotService.cs: Updated all command handlers with role-based access control",
+                "TelegramBotService.cs: Added `HandleRestockHistoryCommandAsync()` for `/riwayat_restock`",
+                "TelegramBotService.cs: Added `HandleInventoryHistoryCommandAsync()` for `/riwayat_inventory`",
+                "TelegramBotService.cs: Added `HandleAutoRestockRecommendationCommandAsync()` for `/rekomendasi_restock`",
+                "TelegramBotService.cs: Added `HandleStockNotificationCommandAsync()` for `/notifikasi_stok`",
+                "TelegramBotService.cs: Added `HandleBulkRestockCommandAsync()` for bulk restock support",
+                "TelegramBotService.cs: Added callback handler for `bulk_restock_confirm_`",
+                "TelegramBotService.cs: Fixed parser logic untuk restock dengan 2 angka di akhir (qty + harga)",
+                "TelegramBotService.cs: Fixed inventory qty=0 validation (izinkan 0 untuk reset stok)",
+                "TelegramBotService.cs: Updated `/help` command dengan daftar command baru",
+                "PosDbService.cs: Fixed `GetRestockHistoryAsync()` - DocumentTypeId = 1 (bukan 100)",
+                "PosDbService.cs: Fixed `GetInventoryHistoryAsync()` - DocumentTypeId = 3 (bukan 300)",
+                "PosDbService.cs: Fixed `GetAutoRestockRecommendationsAsync()` - DocumentTypeId = 1 untuk filter",
+                "PosDbService.cs: Added `GetCriticalStockProductsAsync()` untuk notifikasi stok kritis",
+                "Models/Product.cs: Added `RestockHistoryItem`, `InventoryHistoryItem`, `RestockRecommendation` models",
+                "config.json: Added `OwnerChatIds` and `KasirChatIds` fields",
+                "GroqService.cs: Updated system prompt dengan anti-hallucination rules",
+                "README.md: Updated with new commands and features",
+                "TECHNICAL_DOCS.md: Updated with DocumentTypeId mapping and new services",
+                "AGENT.md: Updated with role-based access and anti-hallucination guidelines",
+                "PROJECT_STRUCTURE.md: Updated with new files and statistics",
+                "RESTOCK.md: Updated with Phase 3 completion status",
+                "QUICK_INVENTORY.md: Updated with Phase 3 completion status",
+                "QUICK_START.md: Updated with new setup steps and commands",
+                "PHASE1_SUMMARY.md: Updated to Phase 3 completion summary",
+                "Verification: dotnet build --configuration Release SUCCESS, 0 errors"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-08",
+            "version": "2.2.0",
+            "title": "Restock Engine Fix & Quick Inventory Feature",
+            "summary": [
+                "RESTOCK ENGINE: Fixed critical bugs yang menyebabkan dokumen tidak muncul di Aronium dan stok tidak terupdate.",
+                "RESTOCK ENGINE: Fixed parsing nama produk multi-kata (e.g., 'kapal api', 'minyak goreng').",
+                "RESTOCK ENGINE: Fixed DocumentTypeId mapping (1 = Purchase untuk FK, 100 = TypeCode untuk nomor dokumen).",
+                "RESTOCK ENGINE: Fixed PaidStatus, DueDate, dan date format agar sesuai dengan schema Aronium.",
+                "RESTOCK ENGINE: Added manual update tabel Stock agar stok langsung terupdate di tampilan utama Aronium.",
+                "RESTOCK ENGINE: Added retry mechanism untuk menghindari duplikat nomor dokumen saat race condition.",
+                "QUICK INVENTORY: New feature `/inventory` untuk koreksi stok tanpa perlu edit dokumen purchase.",
+                "QUICK INVENTORY: Support qty positif (tambah stok) dan negatif (kurangi stok) dengan Document Type 3.",
+                "QUICK INVENTORY: Auto-update tabel Stock dan membuat dokumen Inventory Count di Aronium."
+            ],
+            "details": [
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Major refactor untuk fix semua FK constraint issues",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Added CustomerId=1 (Walk-in customer) ke INSERT",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Added DueDate field (wajib untuk Purchase documents)",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Fixed date format: 'YYYY-MM-DD 00:00:00' untuk Date dan DueDate",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Fixed datetime format: 'YYYY-MM-DD HH:mm:ss.ffffff' untuk StockDate, DateCreated, DateUpdated",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Set PaidStatus=1 (Tidak Dibayar) sesuai standar Aronium",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Added manual UPDATE Stock table setelah insert dokumen",
+                "PosDbService.cs - CreatePurchaseDocumentAsync(): Added check-then-update/insert logic untuk tabel Stock (avoid ON CONFLICT error)",
+                "PosDbService.cs - GenerateNextDocumentNumberAsync(): Added retry mechanism (5x) dengan exponential backoff untuk hindari race condition",
+                "PosDbService.cs - GenerateNextDocumentNumberAsync(): Added mapping DocumentTypeId → TypeCode (1→100, 2→200, 3→300, dst)",
+                "PosDbService.cs - CreateInventoryCountDocumentAsync(): New method untuk membuat dokumen Inventory Count (Type 3)",
+                "TelegramBotService.cs - HandleInventoryCommandAsync(): New command handler untuk `/inventory` dan `/quick_inventory`",
+                "TelegramBotService.cs - HandleCallbackQueryAsync(): Added callback handler untuk inventory_confirm dan inventory_cancel",
+                "TelegramBotService.cs - HandleRestockCommandAsync(): Fixed parsing multi-word product names (parse from back)",
+                "TelegramBotService.cs: Added `/inventory` dan `/quick_inventory` aliases ke command router",
+                "RESTOCK.md: Updated documentation dengan mapping DocumentTypeId vs TypeCode",
+                "RESTOCK.md: Updated roadmap dengan Phase 1 & 2 completion status",
+                "Database schema verification: Stock table (ProductId, WarehouseId, Quantity) - no unique constraint, manual check-then-update required",
+                "Database schema verification: Document Type 3 = Inventory Count (untuk koreksi stok)",
+                "Testing: Restock berhasil dengan nomor dokumen berurutan (26-100-000001, 000002, dst)",
+                "Testing: Stok terupdate di tampilan utama Aronium setelah restart",
+                "Testing: Quick Inventory berhasil menambah/mengurangi stok dengan dokumen Inventory Count"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-05",
+            "version": "2.1.1",
+            "title": "Database Compatibility Fix & Critical Error Resolution",
+            "summary": [
+                "Semua query database Aronium pos.db telah diperbaiki untuk menggunakan schema yang benar (Product, Document, DocumentItem, User, Stock, Payment).",
+                "Dynamic table detection diimplementasikan untuk semua method di PosDbService, menghilangkan hardcoded table names yang menyebabkan error.",
+                "API keys sekarang terenkripsi otomatis dengan DPAPI saat disimpan ke config.json, dan di-decrypt saat dimuat.",
+                "Deadlock risk di TelegramBotService diperbaiki dengan mengubah HandlePollingErrorAsync menjadi async proper.",
+                "Resource leak HttpClient di GroqService diperbaiki dengan implementasi IDisposable.",
+                "DatabaseService sekarang menggunakan absolute path, tidak lagi relative path yang bisa menyebabkan error.",
+                "GetRecentConversationsAsync sekarang mendukung chatId=null untuk mengambil semua conversations tanpa filter.",
+                "Global error handler ditambahkan ke App.xaml.cs untuk mencegah crash tanpa pesan yang jelas.",
+                "Null handling diperbaiki di semua Views (Dashboard, StockMonitoring) untuk mencegah runtime errors.",
+                "CSV escaping di LoggingService diperbaiki untuk menghasilkan file CSV yang valid.",
+                "SettingsView sekarang menyimpan semua settings dengan lengkap termasuk ExpiryThresholds."
+            ],
+            "details": [
+                "Database verification: Aronium schema verified - Product (bukan products), Document (bukan transactions), DocumentItem (bukan transaction_items), User (bukan users), Stock (terpisah dari Product)",
+                "PosDbService.cs: Major refactor - 8 methods diperbaiki untuk menggunakan dynamic table detection dengan SQL injection validation",
+                "ConfigService.cs: EncryptValue/DecryptValue dengan prefix 'ENC:' untuk menandai encrypted values, auto-encrypt saat SaveConfig",
+                "TelegramBotService.cs: HandlePollingErrorAsync diubah dari .Wait() menjadi await async Task",
+                "GroqService.cs: Implement IDisposable dengan pattern proper, dispose HttpClient untuk mencegah socket exhaustion",
+                "DatabaseService.cs: Constructor menggunakan AppDomain.CurrentDomain.BaseDirectory untuk absolute path, GetRecentConversationsAsync mendukung chatId=null",
+                "App.xaml.cs: Tambahkan DispatcherUnhandledException dan UnhandledException handlers untuk global error handling",
+                "LoggingService.cs: EscapeCsvField sekarang wrap fields dengan quotes jika mengandung koma, newline, atau quotes",
+                "DashboardView.xaml.cs: Fix revenue/profit null handling, fix GetRecentConversationsAsync call dengan null chatId",
+                "StockMonitoringView.xaml.cs: Fix low stock filter dengan Stock.HasValue check",
+                "SettingsView.xaml.cs: Fix complete save termasuk ExpiryThresholds, GoogleSheets initialization, dan UpdateNotificationSettings call",
+                "Models/Product.cs: Documentation comments untuk mapping Aronium schema, Margin return null instead of 0",
+                "Models/Product.cs: User model ditambahkan property FullName untuk mapping FirstName + LastName dari Aronium",
+                "Verification: dotnet build --configuration Release SUCCESS, 0 errors, 0 critical warnings"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-05",
+            "version": "2.1",
+            "title": "Phase 1 Complete - Core AI Assistant dengan Telegram Integration",
+            "summary": [
+                "Aplikasi desktop WPF .NET 8 untuk toko sembako dengan AI assistant via Telegram Bot telah selesai Phase 1.",
+                "Natural language conversation dalam bahasa Indonesia dengan short-term & long-term memory system.",
+                "Integrasi Groq API (LLaMA 3.1 70B) dengan automatic Gemini fallback untuk reliability.",
+                "pembacaan database Aronium pos.db (READ-ONLY) untuk data stok, transaksi, dan produk.",
+                "Dashboard monitoring dengan status bot, AI, database, quick insights (revenue, profit, critical stock).",
+                "Settings UI untuk konfigurasi Groq, Telegram, Database, dan Notifications dengan test connections.",
+                "Logging system dengan CSV export untuk monitoring dan troubleshooting."
+            ],
+            "details": [
+                "File impact utama: App.xaml.cs, MainWindow.xaml, DashboardView.xaml, StockMonitoringView.xaml, LogsView.xaml, SettingsView.xaml",
+                "Services: ConfigService.cs (DPAPI encryption), DatabaseService.cs (SQLite CRUD), LoggingService.cs (CSV export), PosDbService.cs (READ-ONLY), GroqService.cs (AI + fallback), TelegramBotService.cs (bot handler)",
+                "Models: AppConfig.cs (configuration), Product.cs (product & transaction), Memory.cs (conversation & logs)",
+                "AI note: Groq API dengan temperature 0.7 untuk conversation, 0.3 untuk parsing; Gemini sebagai fallback otomatis",
+                "Database note: pos.db diakses READ-ONLY, tidak ada write operation ke database Aronium",
+                "Security note: API keys terenkripsi dengan Windows DPAPI, chat ID whitelist untuk bot access control",
+                "Memory note: Short-term memory (8 percakapan terakhir) + long-term memory (patterns & habits)",
+                "Profit awareness: AI mempertimbangkan margin & profit dalam rekomendasi restock",
+                "Verification note: dotnet build --configuration Release sukses, aplikasi berjalan stabil"
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-04-04",
+            "version": "unreleased",
+            "title": "Initial Project Setup dan Phase 1 Development",
+            "summary": [
+                "Setup project structure WPF .NET 8 dengan folder organization (Models, Services, Views, ViewModels, Utils).",
+                "Implementasi 6 core services: ConfigService, DatabaseService, LoggingService, PosDbService, GroqService, TelegramBotService.",
+                "Dashboard UI dengan status monitoring, quick insights, dan recent conversations.",
+                "Stock monitoring dengan search, filter (All, Low Stock, Expiring), dan sortable columns.",
+                "Settings UI untuk konfigurasi semua aspek aplikasi dengan test connections button.",
+                "Documentation lengkap: README.md, TECHNICAL_DOCS.md, QUICK_START.md, PROJECT_STRUCTURE.md, PHASE1_SUMMARY.md."
+            ],
+            "details": [
+                "Project created dengan .NET 8 WPF template",
+                "NuGet packages: Telegram.Bot, Microsoft.Data.Sqlite, Newtonsoft.Json, Google.Apis.Sheets.v4, Tesseract, System.Security.Cryptography.ProtectedData",
+                "Database schema: conversations, long_term_memory, logs, app_config (semua dengan indexes)",
+                "Command handler: /start, /help, /stok, /laporan, /restock, /analisa",
+                "Natural language processing via Groq dengan conversation history context",
+                "Auto-detect pos.db path dari instalasi Aronium default",
+                "Build output: bin\\Release\\net8.0-windows\\SmartSembakoAssistant.dll",
+                "Publish command: dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true"
+            ],
+            "status": "implemented"
+        }
+    ]
+}

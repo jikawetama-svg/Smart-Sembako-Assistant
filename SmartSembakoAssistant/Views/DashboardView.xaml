@@ -1,0 +1,217 @@
+<UserControl x:Class="SmartSembakoAssistant.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+
+    <UserControl.Resources>
+        <!-- Card Style with Hover Effect -->
+        <Style x:Key="StatusCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="18,14"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.06" Direction="270"/>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Effect">
+                        <Setter.Value>
+                            <DropShadowEffect BlurRadius="14" ShadowDepth="4" Opacity="0.12" Direction="270"/>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Insight Card Style -->
+        <Style x:Key="InsightCardStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="22,16"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.08" Direction="270"/>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Effect">
+                        <Setter.Value>
+                            <DropShadowEffect BlurRadius="12" ShadowDepth="4" Opacity="0.15" Direction="270"/>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Action Button Style -->
+        <Style x:Key="ActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#10B981"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Border.CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#059669"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Welcome Header -->
+        <Border Grid.Row="0" Background="White" CornerRadius="10" Padding="20,16" Margin="0,0,0,16">
+            <StackPanel>
+                <TextBlock Text="👋 Welcome back, Owner!" FontSize="18" FontWeight="SemiBold" Foreground="#1F2937" Margin="0,0,0,4"/>
+                <TextBlock x:Name="TxtWelcome" Text="Here's what's happening with your store today" FontSize="12" Foreground="#6B7280"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Status Cards (4 kolom) -->
+        <Grid Grid.Row="1" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource StatusCardStyle}" Margin="0,0,8,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#ECFDF5" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="🤖" FontSize="16"/>
+                        </Border>
+                        <TextBlock Text="Telegram Bot" FontSize="11" Foreground="#6B7280" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtBotStatus" Text="Stopped" FontSize="22" FontWeight="Bold" Foreground="#EF4444" Margin="0,0,0,3"/>
+                    <TextBlock x:Name="TxtBotUptime" Text="-" FontSize="10" Foreground="#9CA3AF"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="1" Style="{StaticResource StatusCardStyle}" Margin="4,0,4,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#EFF6FF" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="🧠" FontSize="16"/>
+                        </Border>
+                        <TextBlock Text="Groq AI" FontSize="11" Foreground="#6B7280" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtGroqStatus" Text="Not Configured" FontSize="22" FontWeight="Bold" Foreground="#EF4444" Margin="0,0,0,3"/>
+                    <TextBlock x:Name="TxtGroqModel" Text="-" FontSize="10" Foreground="#9CA3AF"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource StatusCardStyle}" Margin="4,0,4,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#F0FDF4" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="💾" FontSize="16"/>
+                        </Border>
+                        <TextBlock Text="Database" FontSize="11" Foreground="#6B7280" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtDbStatus" Text="Not Connected" FontSize="22" FontWeight="Bold" Foreground="#EF4444" Margin="0,0,0,3"/>
+                    <TextBlock x:Name="TxtDbPath" Text="-" FontSize="10" Foreground="#9CA3AF" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="3" Style="{StaticResource StatusCardStyle}" Margin="8,0,0,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#FDF4FF" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="🧩" FontSize="16"/>
+                        </Border>
+                        <TextBlock Text="Memory" FontSize="11" Foreground="#6B7280" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtMemoryCount" Text="0" FontSize="22" FontWeight="Bold" Foreground="#10B981" Margin="0,0,0,3"/>
+                    <TextBlock x:Name="TxtMemorySize" Text="-" FontSize="10" Foreground="#9CA3AF"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Quick Insights -->
+        <Grid Grid.Row="2" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource InsightCardStyle}" Background="#D1FAE5" Margin="0,0,8,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#059669" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="💰" FontSize="14"/>
+                        </Border>
+                        <TextBlock Text="Revenue Hari Ini" FontSize="12" Foreground="#059669" Margin="10,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtRevenue" Text="Rp 0" FontSize="30" FontWeight="Bold" Foreground="#059669" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtRevenueVsYesterday" Text="vs kemarin: Rp 0" FontSize="10" Foreground="#10B981"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="1" Style="{StaticResource InsightCardStyle}" Background="#FEF3C7" Margin="4,0,4,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#D97706" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="📈" FontSize="14"/>
+                        </Border>
+                        <TextBlock Text="Estimasi Profit" FontSize="12" Foreground="#D97706" Margin="10,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtProfit" Text="Rp 0" FontSize="30" FontWeight="Bold" Foreground="#D97706" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtProfitMargin" Text="Margin: -" FontSize="10" Foreground="#F59E0B"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource InsightCardStyle}" Background="#FEE2E2" Margin="8,0,0,0">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Border Background="#DC2626" CornerRadius="6" Padding="8,6">
+                            <TextBlock Text="🔴" FontSize="14"/>
+                        </Border>
+                        <TextBlock Text="Critical Stock" FontSize="12" Foreground="#DC2626" Margin="10,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtCriticalStock" Text="0" FontSize="30" FontWeight="Bold" Foreground="#DC2626" Margin="0,0,0,4"/>
+                    <TextBlock Text="produk perlu perhatian" FontSize="10" Foreground="#EF4444"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Actions & Recent -->
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="White" CornerRadius="10" Padding="18,16" Margin="0,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="💬 Recent Conversations" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="#111827"/>
+                    <ListBox x:Name="LstRecentChats" BorderThickness="0" Background="Transparent" MaxHeight="200">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#F9FAFB" CornerRadius="6" Padding="10,8" Margin="0,0,0,5">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding UserName}" FontWeight="SemiBold" FontSize="11" Foreground="#374151"/>
+                                        <TextBlock Text="{Binding Message}" FontSize="10" Foreground="#6B7280" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,153 @@
+<UserControl x:Class="SmartSembakoAssistant.Views.LogsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+
+    <UserControl.Resources>
+        <!-- Summary Badge -->
+        <Style x:Key="SummaryBadgeStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+        </Style>
+
+        <!-- Action Button -->
+        <Style x:Key="LogActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#10B981"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Border.CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#059669"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Danger Button -->
+        <Style x:Key="DangerButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#EF4444"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#EF4444"/>
+            <Setter Property="Border.CornerRadius" Value="6"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FEE2E2"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Filters -->
+        <Border Grid.Row="0" Background="White" CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Level:" VerticalAlignment="Center" FontSize="11" Foreground="#374151" Margin="0,0,6,0"/>
+                <ComboBox x:Name="CmbLevel" Grid.Column="1" Width="110" Padding="8,6" FontSize="11" Margin="0,0,8,0"
+                          SelectionChanged="CmbLevel_SelectionChanged">
+                    <ComboBoxItem Content="Semua" IsSelected="True"/>
+                    <ComboBoxItem Content="Info"/>
+                    <ComboBoxItem Content="Warning"/>
+                    <ComboBoxItem Content="Error"/>
+                </ComboBox>
+
+                <TextBlock Grid.Column="2" Text="Category:" VerticalAlignment="Center" FontSize="11" Foreground="#374151" Margin="0,0,6,0"/>
+                <ComboBox x:Name="CmbCategory" Grid.Column="3" Padding="8,6" FontSize="11" Margin="0,0,8,0"
+                          SelectionChanged="CmbCategory_SelectionChanged">
+                    <ComboBoxItem Content="Semua" IsSelected="True"/>
+                    <ComboBoxItem Content="Command"/>
+                    <ComboBoxItem Content="AI"/>
+                    <ComboBoxItem Content="System"/>
+                </ComboBox>
+
+                <Button x:Name="BtnExport" Grid.Column="4" Content="📥 Export CSV" Style="{StaticResource LogActionButtonStyle}" Click="BtnExport_Click"/>
+            </Grid>
+        </Border>
+
+        <!-- Summary -->
+        <Border Grid.Row="1" Background="White" CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal">
+                <Border Style="{StaticResource SummaryBadgeStyle}" Background="#F3F4F6">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📊 Total:" FontSize="11" Foreground="#6B7280" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="TxtLogCount" Text="0" FontSize="11" FontWeight="Bold" Foreground="#374151"/>
+                    </StackPanel>
+                </Border>
+                
+                <Border Style="{StaticResource SummaryBadgeStyle}" Background="#D1FAE5">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="✅ Info:" FontSize="11" Foreground="#059669" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="TxtInfoCount" Text="0" FontSize="11" FontWeight="Bold" Foreground="#059669"/>
+                    </StackPanel>
+                </Border>
+                
+                <Border Style="{StaticResource SummaryBadgeStyle}" Background="#FEF3C7">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⚠️ Warning:" FontSize="11" Foreground="#D97706" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="TxtWarningCount" Text="0" FontSize="11" FontWeight="Bold" Foreground="#D97706"/>
+                    </StackPanel>
+                </Border>
+                
+                <Border Style="{StaticResource SummaryBadgeStyle}" Background="#FEE2E2">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="❌ Error:" FontSize="11" Foreground="#DC2626" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="TxtErrorCount" Text="0" FontSize="11" FontWeight="Bold" Foreground="#DC2626"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- DataGrid with Virtualization -->
+        <Border Grid.Row="2" Background="White" CornerRadius="10" Padding="10" Margin="0,0,0,12">
+            <DataGrid x:Name="DgLogs"
+                      AutoGenerateColumns="False" IsReadOnly="True"
+                      GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                      CanUserSortColumns="True" SelectionMode="Single"
+                      AlternatingRowBackground="#F9FAFB"
+                      FontSize="11" RowHeight="28"
+                      VirtualizingStackPanel.IsVirtualizing="True"
+                      VirtualizingStackPanel.VirtualizationMode="Recycling"
+                      EnableRowVirtualization="True"
+                      EnableColumnVirtualization="False">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Waktu" Binding="{Binding Timestamp, StringFormat='dd/MM HH:mm:ss'}" Width="130"/>
+                    <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="80"/>
+                    <DataGridTextColumn Header="Kategori" Binding="{Binding Category}" Width="100"/>
+                    <DataGridTextColumn Header="Pesan" Binding="{Binding Message}" Width="*"/>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Border>
+
+        <!-- Footer with Clear Buttons -->
+        <Border Grid.Row="3" Background="White" CornerRadius="8" Padding="14,10">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="TxtDisplayCount" Text="0 logs" FontSize="11" Foreground="#6B7280" Margin="0,0,16,0"/>
+                <Button Content="🗑️ Clear Old Logs (>30 hari)" Style="{StaticResource DangerButtonStyle}" Margin="0,0,6,0" Click="BtnClearOldLogs_Click"/>
+                <Button Content="🗑️ Clear All Logs" Style="{StaticResource DangerButtonStyle}" Click="BtnClearAllLogs_Click"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

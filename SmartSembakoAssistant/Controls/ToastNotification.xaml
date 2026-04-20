@@ -1,0 +1,84 @@
+<Window x:Class="SmartSembakoAssistant.Controls.ToastNotification"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Notification"
+        Width="350"
+        SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        WindowStartupLocation="Manual"
+        Loaded="ToastNotification_Loaded">
+
+    <Window.Resources>
+        <!-- Toast Card Style -->
+        <Style x:Key="ToastCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="16,14"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Direction="270"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="ToastCard" Style="{StaticResource ToastCardStyle}" Margin="10">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Icon -->
+            <Border x:Name="IconBorder" Grid.Column="0" 
+                    CornerRadius="8" Padding="10,8" Margin="0,0,12,0" VerticalAlignment="Top">
+                <TextBlock x:Name="ToastIcon" Text="✅" FontSize="20"/>
+            </Border>
+
+            <!-- Message -->
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="ToastTitle" Text="Success" 
+                           FontSize="13" FontWeight="SemiBold" 
+                           Foreground="#1F2937" Margin="0,0,0,2"/>
+                <TextBlock x:Name="ToastMessage" Text="Operation completed" 
+                           FontSize="12" Foreground="#6B7280" 
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <!-- Close Button -->
+            <Button Grid.Column="2" Content="✕" 
+                    Background="Transparent" BorderThickness="0"
+                    Foreground="#9CA3AF" FontSize="14"
+                    Cursor="Hand" VerticalAlignment="Top"
+                    Click="CloseButton_Click"
+                    Margin="8,0,0,0">
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" 
+                                            CornerRadius="4" Padding="4">
+                                        <ContentPresenter HorizontalAlignment="Center" 
+                                                          VerticalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#F3F4F6"/>
+                                <Setter Property="Foreground" Value="#374151"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+        </Grid>
+    </Border>
+</Window>

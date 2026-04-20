@@ -1,0 +1,51 @@
+## Ignore Visual Studio temporary files, build results
+
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+
+.vs/
+.vscode/
+.idea/
+
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+
+# SmartSembakoAssistant specific
+config.json
+data/memory.db
+data/logs/*
+!data/logs/.gitkeep
+
+# AI/Qwen
+.qwen/
+qwen-code-export-*.html
+qwen-code-export-*.md
+
+# Logs
+*.log
+
+# Temp images
+image.png
+image2.png
+
+Thumbs.db
+ehthumbs.db
+.DS_Store
