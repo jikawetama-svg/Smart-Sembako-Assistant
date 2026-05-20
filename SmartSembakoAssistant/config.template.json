@@ -3,7 +3,8 @@
     "ApiKey": "YOUR_GROQ_API_KEY",
     "Model": "llama-3.1-8b-instant",
     "FallbackApiKey": "YOUR_GEMINI_API_KEY",
-    "FallbackModel": "gemini-3.1-flash-lite-preview",
+    "FallbackModel": "gemini-3.1-flash-lite",
+    "VisionModel": "gemini-3.1-flash-lite",
     "TimeoutSeconds": 30,
     "MaxTokens": 500,
     "Temperature": 0.3
@@ -11,19 +12,97 @@
   "Telegram": {
     "BotToken": "YOUR_TELEGRAM_BOT_TOKEN",
     "AllowedChatIds": [],
+    "OwnerChatIds": [],
+    "KasirChatIds": [],
     "RateLimitSeconds": 5,
     "EnableVoiceNotes": false
+  },
+  "WhatsApp": {
+    "Enabled": true,
+    "Mode": "Baileys",
+    "AccessToken": "",
+    "PhoneNumberId": "",
+    "AppSecret": "",
+    "VerifyToken": "ssa-verify-token",
+    "GraphApiVersion": "v22.0",
+    "LocalWebhookPort": 8090,
+    "PublicWebhookUrl": "",
+    "EnableTemplateMessages": false,
+    "DefaultTemplateLanguageCode": "id",
+    "TemplateMappings": [
+      { "Key": "StockAlert", "TemplateName": "ssa_low_stock_alert", "LanguageCode": "id", "BodyParameterCount": 1 },
+      { "Key": "Schedule", "TemplateName": "ssa_daily_summary", "LanguageCode": "id", "BodyParameterCount": 1 },
+      { "Key": "ReceivableAlert", "TemplateName": "ssa_receivable_alert", "LanguageCode": "id", "BodyParameterCount": 1 },
+      { "Key": "ExpiryAlert", "TemplateName": "ssa_expiry_alert", "LanguageCode": "id", "BodyParameterCount": 1 },
+      { "Key": "AnomalyAlert", "TemplateName": "ssa_anomaly_alert", "LanguageCode": "id", "BodyParameterCount": 1 },
+      { "Key": "Test", "TemplateName": "ssa_test_message", "LanguageCode": "id", "BodyParameterCount": 1 }
+    ],
+    "OutboundMaxRetries": 5,
+    "InitialRetryDelaySeconds": 15,
+    "OwnerNumbers": [],
+    "KasirNumbers": []
+  },
+  "Baileys": {
+    "Enabled": true,
+    "BotPhoneNumber": "6281234567890",
+    "NodeBinaryPath": "runtimes\\node\\node.exe",
+    "SidecarEntryPath": "Integrations\\BaileysSidecar\\index.js",
+    "WorkingDirectory": "Integrations\\BaileysSidecar",
+    "SessionPath": "data\\baileys-session",
+    "LocalApiPort": 8091,
+    "AutoStart": true,
+    "MessageDelayMinMs": 1500,
+    "MessageDelayMaxMs": 3500,
+    "MaxMessagesPerMinute": 20,
+    "PairingCodeTtlSeconds": 120,
+    "PairingRetryCooldownSeconds": 30,
+    "PairingRateLimitCooldownMinutes": 2,
+    "MaxPairingRequestsPerHour": 8,
+    "AutoResetSessionOnPairingFailure": false,
+    "OwnerNumbers": [],
+    "KasirNumbers": []
+  },
+  "Tunnel": {
+    "Enabled": false,
+    "Provider": "cloudflared",
+    "BinaryPath": "runtimes\\cloudflared\\cloudflared.exe",
+    "ArgsTemplate": "tunnel --url http://localhost:{port} --http-host-header localhost:{port}",
+    "PublicUrl": ""
+  },
+  "Automation": {
+    "EnableTemplates": true,
+    "EnableLowStockAlerts": true,
+    "EnableDailySummary": false,
+    "EnableReceivableAlerts": false,
+    "EnableExpiryAlerts": false,
+    "EnableAnomalyAlerts": false,
+    "DailySummaryTime": "07:00",
+    "LowStockAlertTime": "07:00",
+    "ReceivableAlertTime": "08:00",
+    "ExpiryAlertTime": "08:30",
+    "AnomalyAlertTime": "21:00",
+    "Templates": [],
+    "Rules": []
   },
   "PosDb": {
     "DatabasePath": "C:\\Users\\{USERNAME}\\AppData\\Local\\Aronium\\Data\\pos.db",
     "AutoDetect": true
   },
   "GoogleSheets": {
+    "Enabled": false,
     "CredentialsJsonPath": "credentials.json",
     "SpreadsheetId": "YOUR_SPREADSHEET_ID",
     "TransaksiSheetName": "Transaksi",
     "AnalitikSheetName": "Analitik",
-    "LogSheetName": "Log"
+    "LogSheetName": "Log",
+    "PurchaseSheetName": "Pembelian"
+  },
+  "OcrReceipt": {
+    "Enabled": false,
+    "TessdataPath": "tessdata",
+    "TriggerCaption": "/struk",
+    "TextTriggerCaption": "/inputstruk",
+    "AutoDetectTextReceipt": false
   },
   "Memory": {
     "ShortTermHistoryCount": 10,
@@ -50,5 +129,12 @@
     "MinimizeToTray": true,
     "LogPath": "data\\logs",
     "MaxLogDays": 30
+  },
+  "Setup": {
+    "IsFirstRun": true,
+    "SetupCompleted": false,
+    "PreferredChannelMode": "WhatsAppOnly",
+    "LastReadinessStatus": "needs_setup",
+    "LastAutoRepairAt": null
   }
 }

@@ -33,6 +33,28 @@ config.json
 data/memory.db
 data/logs/*
 !data/logs/.gitkeep
+artifacts/
+
+# Google Service Account keys (RAHASIA - jangan commit!)
+*-b2b070766971.json
+automation-sheets-*.json
+*service-account*.json
+*credentials*.json
+
+# Tessdata binary (besar, tidak perlu di repo)
+tessdata/
+
+# Codex build artifacts
+.codex-build/
+.codex-obj-upgrade/
+
+# WhatsApp / Baileys session data (RAHASIA!)
+data/baileys-session*/
+data/*.db
+
+# Archive/binary tidak perlu
+*.rar
+*.zip
 
 # AI/Qwen
 .qwen/

@@ -1,0 +1,47 @@
+# ============================================================
+#  Root-level .gitignore — Smart Sembako Assistant
+#  File ini melindungi root folder dari file sensitif/besar
+# ============================================================
+
+# --- Konfigurasi sensitif (API key, token, dsb) ---
+config.json
+*.env
+.env*
+
+# --- Runtime besar (jangan di-push ke repo) ---
+cloudflared.exe
+*.exe
+runtimes/
+
+# --- Log & error ---
+*.log
+AIChatError.log
+
+# --- Build / compile output ---
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+
+# --- IDE & editor ---
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# --- OS generated ---
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# --- Node.js (jika ada di root) ---
+node_modules/
+
+# --- Temporary ---
+Tempt/
+*.tmp
+*.bak
+
+# --- NuGet ---
+*.nupkg

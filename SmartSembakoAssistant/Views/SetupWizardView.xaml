@@ -1,0 +1,159 @@
+<UserControl x:Class="SmartSembakoAssistant.Views.SetupWizardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+
+    <UserControl.Resources>
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="Padding" Value="24"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+            <Setter Property="BorderBrush" Value="#E2E8F0"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style x:Key="InputStyle" TargetType="TextBox">
+            <Setter Property="Height" Value="42"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="BorderBrush" Value="#CBD5E1"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="#F8FAFC"/>
+        </Style>
+
+        <Style x:Key="ComboStyle" TargetType="ComboBox">
+            <Setter Property="Height" Value="42"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="BorderBrush" Value="#CBD5E1"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="#F8FAFC"/>
+        </Style>
+
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#0F766E"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Padding" Value="16,12"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="12">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="GhostButtonStyle" TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+            <Setter Property="Background" Value="#E2E8F0"/>
+            <Setter Property="Foreground" Value="#0F172A"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid MaxWidth="920">
+        <StackPanel>
+            <Border Style="{StaticResource CardStyle}" Background="#0F172A" BorderThickness="0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2.4*"/>
+                        <ColumnDefinition Width="1.2*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel>
+                        <TextBlock Text="Setup Cepat Smart Sembako Assistant" FontSize="28" FontWeight="Bold" Foreground="White"/>
+                        <TextBlock Text="Isi sedikit data inti. Aplikasi akan mengurus bootstrap WhatsApp, pairing, dan runtime." Margin="0,10,0,0" Foreground="#CBD5E1" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="TxtWizardSummary" Margin="0,18,0,0" Foreground="#99F6E4" TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <Border Grid.Column="1" Background="#111827" CornerRadius="14" Padding="16" Margin="18,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Target Input User" FontWeight="SemiBold" Foreground="White"/>
+                            <TextBlock Text="1. Nomor bot WhatsApp" Margin="0,12,0,0" Foreground="#E5E7EB"/>
+                            <TextBlock Text="2. Nomor owner/admin" Margin="0,4,0,0" Foreground="#E5E7EB"/>
+                            <TextBlock Text="3. Groq API key" Margin="0,4,0,0" Foreground="#E5E7EB"/>
+                            <TextBlock Text="4. Token Telegram jika dipilih" Margin="0,4,0,0" Foreground="#9CA3AF"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="Pengaturan Dasar" FontSize="18" FontWeight="SemiBold" Foreground="#0F172A"/>
+                    <TextBlock Text="Wizard ini memfokuskan setup ke mode Baileys lokal. Settings teknis tetap tersedia di menu Settings." Margin="0,4,0,18" Foreground="#64748B" TextWrapping="Wrap"/>
+
+                    <TextBlock Text="Mode Kanal" Foreground="#334155" Margin="0,0,0,6"/>
+                    <ComboBox x:Name="CmbChannelMode" Style="{StaticResource ComboStyle}" SelectionChanged="CmbChannelMode_SelectionChanged">
+                        <ComboBoxItem Content="WhatsApp saja"/>
+                        <ComboBoxItem Content="Telegram + WhatsApp"/>
+                        <ComboBoxItem Content="Telegram saja"/>
+                    </ComboBox>
+
+                    <Grid Margin="0,18,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Text="Nomor Bot WhatsApp" Foreground="#334155" Margin="0,0,0,6"/>
+                            <TextBox x:Name="TxtBotPhoneNumber" Style="{StaticResource InputStyle}" ToolTip="Nomor yang akan dipairing menjadi bot WhatsApp, contoh 6281234567890"/>
+                            <TextBlock x:Name="TxtBotPhoneHint" Margin="0,6,0,0" Foreground="#64748B" TextWrapping="Wrap"
+                                       Text="Nomor ini dipakai saat generate pairing code. Gunakan format angka saja, contoh 6281234567890."/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                            <TextBlock Text="Nomor Owner/Admin" Foreground="#334155" Margin="0,0,0,6"/>
+                            <TextBox x:Name="TxtOwnerPhoneNumber" Style="{StaticResource InputStyle}" ToolTip="Nomor owner yang berhak mengakses fitur owner"/>
+                            <TextBlock Margin="0,6,0,0" Foreground="#64748B" TextWrapping="Wrap"
+                                       Text="Nomor owner dipakai untuk otorisasi fitur owner di WhatsApp."/>
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="Groq API Key" Foreground="#334155" Margin="0,18,0,6"/>
+                    <TextBox x:Name="TxtGroqApiKey" Style="{StaticResource InputStyle}" ToolTip="Masukkan API key Groq"/>
+
+                    <StackPanel x:Name="PanelTelegram" Margin="0,18,0,0" Visibility="Collapsed">
+                        <TextBlock Text="Telegram Bot Token" Foreground="#334155" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtTelegramToken" Style="{StaticResource InputStyle}" ToolTip="Hanya isi jika Telegram dipakai"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="TxtBasicStatus" Margin="0,16,0,0" Foreground="#0F766E" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                        <Button x:Name="BtnOpenAdvanced" Content="Buka Settings Lanjutan" Style="{StaticResource GhostButtonStyle}" Margin="0,0,10,0" Click="BtnOpenAdvanced_Click"/>
+                        <Button x:Name="BtnSaveAndConnect" Content="Hubungkan &amp; Jalankan" Style="{StaticResource PrimaryButtonStyle}" Click="BtnSaveAndConnect_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="PairingCard" Style="{StaticResource CardStyle}" Visibility="Collapsed">
+                <StackPanel>
+                    <TextBlock Text="Hubungkan WhatsApp Lokal" FontSize="18" FontWeight="SemiBold" Foreground="#0F172A"/>
+                    <TextBlock x:Name="TxtPairingStatus" Margin="0,8,0,0" Foreground="#0F766E" TextWrapping="Wrap"/>
+
+                    <Border Background="#ECFDF5" BorderBrush="#A7F3D0" BorderThickness="1" CornerRadius="14" Padding="18" Margin="0,18,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Kode Pairing" FontWeight="SemiBold" Foreground="#065F46"/>
+                            <TextBlock x:Name="TxtPairingCode" FontSize="30" FontWeight="Bold" Foreground="#065F46" Margin="0,10,0,0" Text="-" HorizontalAlignment="Center"/>
+                            <TextBlock Margin="0,14,0,0" Foreground="#065F46" TextWrapping="Wrap"
+                                       Text="Kode pairing sekarang ditampilkan di jendela khusus agar tidak hilang. Jangan generate ulang selama kode masih aktif."/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="TxtPairingDiagnostics" Margin="0,12,0,0" Foreground="#64748B" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                        <Button x:Name="BtnCopyPairingCode" Content="Copy Pairing Code" Style="{StaticResource GhostButtonStyle}" Margin="0,0,8,0" Click="BtnCopyPairingCode_Click"/>
+                        <Button x:Name="BtnRetryPairing" Content="Buka Pairing Window" Style="{StaticResource GhostButtonStyle}" Margin="0,0,8,0" Click="BtnRetryPairing_Click"/>
+                        <Button x:Name="BtnResetSession" Content="Reset dari Window" Style="{StaticResource GhostButtonStyle}" Margin="0,0,8,0" Click="BtnResetSession_Click"/>
+                        <Button x:Name="BtnFinishWithoutPairing" Content="Lanjut ke Dashboard" Style="{StaticResource PrimaryButtonStyle}" Click="BtnFinishWithoutPairing_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </Grid>
+</UserControl>

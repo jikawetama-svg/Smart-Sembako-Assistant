@@ -4,7 +4,6 @@
              Background="Transparent">
 
     <UserControl.Resources>
-        <!-- Section Style -->
         <Style x:Key="SectionStyle" TargetType="Border">
             <Setter Property="Background" Value="White"/>
             <Setter Property="CornerRadius" Value="10"/>
@@ -12,7 +11,6 @@
             <Setter Property="Margin" Value="0,0,0,12"/>
         </Style>
 
-        <!-- Input Style -->
         <Style x:Key="InputStyle" TargetType="TextBox">
             <Setter Property="Background" Value="#F9FAFB"/>
             <Setter Property="BorderBrush" Value="#E5E7EB"/>
@@ -22,7 +20,6 @@
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
 
-        <!-- Combo Style -->
         <Style x:Key="ComboStyle" TargetType="ComboBox">
             <Setter Property="Background" Value="#F9FAFB"/>
             <Setter Property="BorderBrush" Value="#E5E7EB"/>
@@ -31,8 +28,7 @@
             <Setter Property="FontSize" Value="12"/>
         </Style>
 
-        <!-- Test Button -->
-        <Style x:Key="TestButtonStyle" TargetType="Button">
+        <Style x:Key="SmallButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="#F3F4F6"/>
             <Setter Property="Foreground" Value="#374151"/>
             <Setter Property="Padding" Value="8,6"/>
@@ -48,7 +44,6 @@
             </Style.Triggers>
         </Style>
 
-        <!-- Save Button -->
         <Style x:Key="SaveButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="#10B981"/>
             <Setter Property="Foreground" Value="White"/>
@@ -64,43 +59,59 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <Style x:Key="HelpTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="#6B7280"/>
+            <Setter Property="Margin" Value="0,4,0,10"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <Style x:Key="StatusTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="#1D4ED8"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
     </UserControl.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <!-- AI PRIMARY -->
-            <Border Grid.Row="0" Style="{StaticResource SectionStyle}">
+        <StackPanel>
+            <Border Style="{StaticResource SectionStyle}">
                 <StackPanel>
-                    <TextBlock Text="🧠 AI PRIMARY (Groq)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="#10B981"/>
-                    
-                    <TextBlock Text="API Key:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                    <Grid Margin="0,0,0,10">
+                    <TextBlock Text="Status Draft" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="#111827"/>
+                    <TextBlock x:Name="TxtDraftStatus" Text="Semua perubahan sudah tersimpan." FontSize="11" Foreground="#2563EB" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="AI Primary (Groq)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="#10B981"/>
+
+                    <TextBlock Text="API Key" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtGroqApiKey" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,8,0"
-                                 Text="••••••••••••" TextChanged="TxtGroqApiKey_TextChanged"/>
-                        <Button x:Name="BtnShowGroqKey" Grid.Column="1" Content="👁️" Style="{StaticResource TestButtonStyle}" Margin="0,0,4,0" Click="BtnShowGroqKey_Click"/>
-                        <Button x:Name="BtnTestGroq" Grid.Column="2" Content="🧪 Test" Style="{StaticResource TestButtonStyle}" Click="BtnTestGroq_Click"/>
+                        <Grid Grid.Column="0" Margin="0,0,8,0">
+                            <TextBox x:Name="TxtGroqApiKey" Style="{StaticResource InputStyle}"/>
+                            <Border x:Name="OverlayGroqApiKey" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" IsHitTestVisible="False">
+                                <TextBlock x:Name="TxtGroqApiKeyMasked" Margin="10,8" Foreground="#6B7280"/>
+                            </Border>
+                        </Grid>
+                        <Button x:Name="BtnShowGroqKey" Grid.Column="1" Content="Show" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnShowGroqKey_Click"/>
+                        <Button x:Name="BtnTestGroq" Grid.Column="2" Content="Test" Style="{StaticResource SmallButtonStyle}" Click="BtnTestGroq_Click"/>
                     </Grid>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Isi Groq API key utama. Field ini disimpan terenkripsi di config."/>
 
-                    <TextBlock Text="Model:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBlock Text="Model" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <ComboBox x:Name="CmbGroqModel" Style="{StaticResource ComboStyle}" Margin="0,0,0,10">
-                        <ComboBoxItem Content="llama-3.1-8b-instant" IsSelected="True"/>
+                        <ComboBoxItem Content="llama-3.1-8b-instant"/>
                         <ComboBoxItem Content="llama-3.1-70b-versatile"/>
+                        <ComboBoxItem Content="llama-3.3-70b-versatile"/>
                         <ComboBoxItem Content="gemma2-9b-it"/>
-                        <ComboBoxItem Content="mixtral-8x7b-32768"/>
                     </ComboBox>
 
                     <Grid>
@@ -109,116 +120,551 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,0,6,0">
-                            <TextBlock Text="Max Tokens:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                            <TextBox x:Name="TxtMaxTokens" Style="{StaticResource InputStyle}" Text="1000"/>
+                            <TextBlock Text="Max Tokens" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtMaxTokens" Style="{StaticResource InputStyle}" Text="500"/>
                         </StackPanel>
                         <StackPanel Grid.Column="1" Margin="6,0,0,0">
-                            <TextBlock Text="Temperature:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBlock Text="Temperature" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                             <TextBox x:Name="TxtTemperature" Style="{StaticResource InputStyle}" Text="0.7"/>
                         </StackPanel>
                     </Grid>
+                    <TextBlock x:Name="TxtGroqValidation" Style="{StaticResource StatusTextStyle}"/>
                 </StackPanel>
             </Border>
 
-            <!-- AI FALLBACK -->
-            <Border Grid.Row="1" Style="{StaticResource SectionStyle}">
+            <Border Style="{StaticResource SectionStyle}">
                 <StackPanel>
-                    <TextBlock Text="🔄 AI FALLBACK (Gemini)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#F59E0B"/>
-                    
-                    <CheckBox x:Name="ChkEnableFallback" Content="Enable Fallback (auto-switch saat Groq error)" FontSize="11" Margin="0,0,0,10"
-                              Checked="ChkEnableFallback_Changed" Unchecked="ChkEnableFallback_Changed"/>
+                    <TextBlock Text="AI Fallback (Gemini)" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#F59E0B"/>
 
-                    <TextBlock Text="API Key:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                    <Grid Margin="0,0,0,10">
+                    <CheckBox x:Name="ChkEnableFallback" Content="Enable fallback AI" Margin="0,0,0,10" Checked="ChkEnableFallback_Changed" Unchecked="ChkEnableFallback_Changed"/>
+
+                    <TextBlock Text="Fallback API Key" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtGeminiApiKey" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,8,0"
-                                 Text="••••••••••••" TextChanged="TxtGeminiApiKey_TextChanged"/>
-                        <Button x:Name="BtnShowGeminiKey" Grid.Column="1" Content="👁️" Style="{StaticResource TestButtonStyle}" Margin="0,0,4,0" Click="BtnShowGeminiKey_Click"/>
-                        <Button x:Name="BtnTestGemini" Grid.Column="2" Content="🧪 Test" Style="{StaticResource TestButtonStyle}" Click="BtnTestGemini_Click"/>
+                        <Grid Grid.Column="0" Margin="0,0,8,0">
+                            <TextBox x:Name="TxtGeminiApiKey" Style="{StaticResource InputStyle}"/>
+                            <Border x:Name="OverlayGeminiApiKey" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" IsHitTestVisible="False">
+                                <TextBlock x:Name="TxtGeminiApiKeyMasked" Margin="10,8" Foreground="#6B7280"/>
+                            </Border>
+                        </Grid>
+                        <Button x:Name="BtnShowGeminiKey" Grid.Column="1" Content="Show" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnShowGeminiKey_Click"/>
+                        <Button x:Name="BtnTestGemini" Grid.Column="2" Content="Test" Style="{StaticResource SmallButtonStyle}" Click="BtnTestGemini_Click"/>
                     </Grid>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Opsional. Hanya dipakai jika fallback diaktifkan."/>
 
-                    <TextBlock Text="Model:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBlock Text="Fallback Model" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <ComboBox x:Name="CmbGeminiModel" Style="{StaticResource ComboStyle}">
-                        <ComboBoxItem Content="gemini-3.1-flash-lite-preview" IsSelected="True"/>
-                        <ComboBoxItem Content="gemini-2.5-flash-lite"/>
-                        <ComboBoxItem Content="gemma-4-31b"/>
+                        <ComboBoxItem Content="gemma-4-31b-it"/>
+                        <ComboBoxItem Content="gemma-4-27b-it"/>
+                        <ComboBoxItem Content="gemini-3.1-flash-lite"/>
+                        <ComboBoxItem Content="gemini-3.1-flash-lite-preview"/>
                     </ComboBox>
                 </StackPanel>
             </Border>
 
-            <!-- AI BEHAVIOR -->
-            <Border Grid.Row="2" Style="{StaticResource SectionStyle}">
+            <Border Style="{StaticResource SectionStyle}">
                 <StackPanel>
-                    <TextBlock Text="⚙️ AI BEHAVIOR" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#3B82F6"/>
-                    
-                    <CheckBox x:Name="ChkAutoSwitch" Content="Auto-switch ke Fallback saat error" FontSize="11" Margin="0,0,0,6" IsChecked="True"/>
-                    <CheckBox x:Name="ChkCacheAI" Content="Cache AI responses (hemat API limit)" FontSize="11" Margin="0,0,0,10" IsChecked="True"/>
+                    <TextBlock Text="Telegram" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
 
-                    <Grid>
+                    <TextBlock Text="Bot Token" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid Grid.Column="0" Margin="0,0,8,0">
+                            <TextBox x:Name="TxtBotToken" Style="{StaticResource InputStyle}"/>
+                            <Border x:Name="OverlayBotToken" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" IsHitTestVisible="False">
+                                <TextBlock x:Name="TxtBotTokenMasked" Margin="10,8" Foreground="#6B7280"/>
+                            </Border>
+                        </Grid>
+                        <Button x:Name="BtnShowBotToken" Grid.Column="1" Content="Show" Style="{StaticResource SmallButtonStyle}" Click="BtnShowBotToken_Click"/>
+                    </Grid>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Contoh format: 123456789:AA... dari BotFather."/>
+
+                    <TextBlock Text="Owner Chat IDs" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtOwnerChatIds" Style="{StaticResource InputStyle}" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Pisahkan dengan koma. Contoh: 123456789, 987654321"/>
+
+                    <TextBlock Text="Kasir Chat IDs" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtKasirChatIds" Style="{StaticResource InputStyle}"/>
+                    <TextBlock x:Name="TxtTelegramValidation" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="WhatsApp" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#2563EB"/>
+
+                    <CheckBox x:Name="ChkWhatsAppEnabled" Content="Enable WhatsApp integration" Margin="0,0,0,10" Checked="ChkWhatsAppEnabled_Changed" Unchecked="ChkWhatsAppEnabled_Changed"/>
+
+                    <TextBlock Text="Transport Mode" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <ComboBox x:Name="CmbWhatsAppMode" Style="{StaticResource ComboStyle}" Margin="0,0,0,4">
+                        <ComboBoxItem Content="CloudApi"/>
+                        <ComboBoxItem Content="Baileys"/>
+                        <ComboBoxItem Content="Both"/>
+                    </ComboBox>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="CloudApi = resmi Meta. Baileys = lokal via Node sidecar. Both = keduanya aktif bersamaan."/>
+
+                    <TextBlock Text="Access Token" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid Grid.Column="0" Margin="0,0,8,0">
+                            <TextBox x:Name="TxtWhatsAppAccessToken" Style="{StaticResource InputStyle}"/>
+                            <Border x:Name="OverlayWhatsAppAccessToken" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" IsHitTestVisible="False">
+                                <TextBlock x:Name="TxtWhatsAppAccessTokenMasked" Margin="10,8" Foreground="#6B7280"/>
+                            </Border>
+                        </Grid>
+                        <Button x:Name="BtnShowWhatsAppAccessToken" Grid.Column="1" Content="Show" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnShowWhatsAppAccessToken_Click"/>
+                        <Button x:Name="BtnTestWhatsAppMeta" Grid.Column="2" Content="Test Meta" Style="{StaticResource SmallButtonStyle}" Click="BtnTestWhatsAppMeta_Click"/>
+                    </Grid>
+
+                    <TextBlock Text="Phone Number ID" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtWhatsAppPhoneNumberId" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="App Secret" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid Grid.Column="0" Margin="0,0,8,0">
+                            <TextBox x:Name="TxtWhatsAppAppSecret" Style="{StaticResource InputStyle}"/>
+                            <Border x:Name="OverlayWhatsAppAppSecret" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" IsHitTestVisible="False">
+                                <TextBlock x:Name="TxtWhatsAppAppSecretMasked" Margin="10,8" Foreground="#6B7280"/>
+                            </Border>
+                        </Grid>
+                        <Button x:Name="BtnShowWhatsAppAppSecret" Grid.Column="1" Content="Show" Style="{StaticResource SmallButtonStyle}" Click="BtnShowWhatsAppAppSecret_Click"/>
+                    </Grid>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Wajib untuk mode production-ready Cloud API karena dipakai validasi signature webhook."/>
+
+                    <TextBlock Text="Verify Token" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid Grid.Column="0" Margin="0,0,8,0">
+                            <TextBox x:Name="TxtWhatsAppVerifyToken" Style="{StaticResource InputStyle}"/>
+                            <Border x:Name="OverlayWhatsAppVerifyToken" Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" IsHitTestVisible="False">
+                                <TextBlock x:Name="TxtWhatsAppVerifyTokenMasked" Margin="10,8" Foreground="#6B7280"/>
+                            </Border>
+                        </Grid>
+                        <Button x:Name="BtnShowWhatsAppVerifyToken" Grid.Column="1" Content="Show" Style="{StaticResource SmallButtonStyle}" Click="BtnShowWhatsAppVerifyToken_Click"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,0,6,0">
-                            <TextBlock Text="Retry Count:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                            <TextBox x:Name="TxtRetryCount" Style="{StaticResource InputStyle}" Text="2"/>
+                            <TextBlock Text="Webhook Port" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtWhatsAppLocalPort" Style="{StaticResource InputStyle}" Text="8090"/>
                         </StackPanel>
                         <StackPanel Grid.Column="1" Margin="6,0,0,0">
-                            <TextBlock Text="Auto Recovery (min):" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                            <TextBox x:Name="TxtAutoRecovery" Style="{StaticResource InputStyle}" Text="5"/>
+                            <TextBlock Text="Public Base URL" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtWhatsAppPublicUrl" Style="{StaticResource InputStyle}"/>
                         </StackPanel>
                     </Grid>
-                </StackPanel>
-            </Border>
 
-            <!-- Telegram -->
-            <Border Grid.Row="3" Style="{StaticResource SectionStyle}">
-                <StackPanel>
-                    <TextBlock Text="🤖 Telegram Bot" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
-                    <TextBlock Text="Bot Token:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <Grid Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtBotToken" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,8,0"
-                                 Text="••••••••••••" TextChanged="TxtBotToken_TextChanged"/>
-                        <Button x:Name="BtnShowBotToken" Grid.Column="1" Content="👁️" Style="{StaticResource TestButtonStyle}" Click="BtnShowBotToken_Click"/>
+                        <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                            <TextBlock Text="Outbound Max Retries" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtWhatsAppMaxRetries" Style="{StaticResource InputStyle}" Text="5"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                            <TextBlock Text="Initial Retry Delay (s)" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtWhatsAppRetryDelay" Style="{StaticResource InputStyle}" Text="15"/>
+                        </StackPanel>
                     </Grid>
-                    <TextBlock Text="Owner Chat IDs:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                    <TextBox x:Name="TxtOwnerChatIds" Style="{StaticResource InputStyle}"/>
+
+                    <CheckBox x:Name="ChkWhatsAppTemplateMessages" Content="Enable WhatsApp Cloud template messages" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Default OFF. Aktifkan hanya jika template Meta sudah approved untuk pesan proaktif di luar 24 jam."/>
+
+                    <TextBlock Text="Default Template Language" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtWhatsAppTemplateLanguage" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Template Mappings" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtWhatsAppTemplateMappings" Style="{StaticResource InputStyle}" AcceptsReturn="True" Height="92" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Format per baris: Key=template_name|language|jumlah_parameter. Contoh: StockAlert=ssa_low_stock_alert|id|1"/>
+
+                    <TextBlock Text="Owner Numbers" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtWhatsAppOwnerNumbers" Style="{StaticResource InputStyle}" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Format nomor WA: 628123456789, 6282223334444"/>
+
+                    <TextBlock Text="Kasir Numbers" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtWhatsAppKasirNumbers" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnTestWhatsAppWebhook" Content="Test Webhook" Style="{StaticResource SmallButtonStyle}" Margin="0,0,8,0" Click="BtnTestWhatsAppWebhook_Click"/>
+                        <Button x:Name="BtnTestWhatsAppSend" Content="Test Outbound" Style="{StaticResource SmallButtonStyle}" Margin="0,0,8,0" Click="BtnTestWhatsAppSend_Click"/>
+                        <Button x:Name="BtnTestWhatsAppTemplate" Content="Test Template" Style="{StaticResource SmallButtonStyle}" Click="BtnTestWhatsAppTemplate_Click"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtWhatsAppValidation" Style="{StaticResource StatusTextStyle}"/>
                 </StackPanel>
             </Border>
 
-            <!-- Database -->
-            <Border Grid.Row="4" Style="{StaticResource SectionStyle}">
+            <Border Style="{StaticResource SectionStyle}">
                 <StackPanel>
-                    <TextBlock Text="💾 Database" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
-                    <TextBlock Text="pos.db Path:" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBlock Text="WhatsApp Baileys Lokal" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#0F766E"/>
+
+                    <CheckBox x:Name="ChkBaileysEnabled" Content="Enable Baileys local sidecar" Margin="0,0,0,6" Checked="ChkBaileysEnabled_Changed" Unchecked="ChkBaileysEnabled_Changed"/>
+                    <CheckBox x:Name="ChkBaileysAutoStart" Content="Auto-start Node sidecar from desktop app" Margin="0,0,0,10"/>
+
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Baileys bukan API resmi WhatsApp Business. Gunakan hanya jika Anda menerima risiko stabilitas dan ToS."/>
+
+                    <TextBlock Text="Bot Phone Number" FontSize="11" Margin="0,12,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtBaileysBotPhoneNumber" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Node Binary Path" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtBaileysNodeBinaryPath" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Sidecar Entry Path" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtBaileysSidecarEntryPath" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Working Directory" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtBaileysWorkingDirectory" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                            <TextBlock Text="Session Path" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtBaileysSessionPath" Style="{StaticResource InputStyle}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                            <TextBlock Text="Local API Port" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                            <TextBox x:Name="TxtBaileysLocalApiPort" Style="{StaticResource InputStyle}" Text="8091"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="Owner Numbers" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtBaileysOwnerNumbers" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Kasir Numbers" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtBaileysKasirNumbers" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnTestBaileys" Content="Test Baileys" Style="{StaticResource SmallButtonStyle}" Margin="0,0,8,0" Click="BtnTestBaileys_Click"/>
+                        <Button x:Name="BtnStartBaileysPairing" Content="Start Pairing" Style="{StaticResource SmallButtonStyle}" Click="BtnStartBaileysPairing_Click"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtBaileysValidation" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="Tunnel" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#7C3AED"/>
+
+                    <CheckBox x:Name="ChkTunnelEnabled" Content="Enable built-in tunnel manager" Margin="0,0,0,10" Checked="ChkTunnelEnabled_Changed" Unchecked="ChkTunnelEnabled_Changed"/>
+
+                    <TextBlock Text="Provider" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <ComboBox x:Name="CmbTunnelProvider" Style="{StaticResource ComboStyle}" Margin="0,0,0,10">
+                        <ComboBoxItem Content="cloudflared"/>
+                        <ComboBoxItem Content="external-process"/>
+                        <ComboBoxItem Content="manual"/>
+                    </ComboBox>
+
+                    <TextBlock Text="Binary Path" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtTunnelBinaryPath" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Args Template" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtTunnelArgsTemplate" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Current / Manual Public URL" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtTunnelPublicUrl" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnTestTunnel" Content="Test Tunnel" Style="{StaticResource SmallButtonStyle}" Click="BtnTestTunnel_Click"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtTunnelValidation" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="Automation Engine" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#DC2626"/>
+
+                    <CheckBox x:Name="ChkEnableTemplates" Content="Enable template-based automation" Margin="0,0,0,6"/>
+                    <CheckBox x:Name="ChkEnableLowStockAlerts" Content="Enable low stock alerts" Margin="0,0,0,6"/>
+                    <TextBlock Text="Low Stock Alert Time (HH:mm)" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtLowStockAlertTime" Style="{StaticResource InputStyle}" Margin="0,0,0,6"/>
+                    <TextBlock Text="Low stock alert channels" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <CheckBox x:Name="ChkEnableTelegramLowStockAlerts" Content="Telegram" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="ChkEnableWhatsAppCloudLowStockAlerts" Content="WhatsApp Cloud API" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="ChkEnableBaileysLowStockAlerts" Content="WhatsApp Baileys" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Auto alert WhatsApp default nonaktif. Aktifkan hanya jika memang ingin kirim notifikasi stok otomatis ke channel tersebut."/>
+                    <CheckBox x:Name="ChkEnableDailySummary" Content="Enable daily summary" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Daily Summary Time (HH:mm)" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtDailySummaryTime" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Default Templates" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtAutomationTemplates" Style="{StaticResource InputStyle}" IsReadOnly="True" AcceptsReturn="True" Height="110" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="Database" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <TextBlock Text="pos.db Path" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="TxtPosDbPath" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,8,0"/>
-                        <Button x:Name="BtnBrowse" Grid.Column="1" Content="Browse" Style="{StaticResource TestButtonStyle}" Click="BtnBrowse_Click"/>
+                        <Button x:Name="BtnBrowse" Grid.Column="1" Content="Browse" Style="{StaticResource SmallButtonStyle}" Click="BtnBrowse_Click"/>
                     </Grid>
-                    <CheckBox x:Name="ChkAutoDetect" Content="Auto-detect pos.db path" FontSize="11" Margin="0,8,0,0"
-                              Checked="ChkAutoDetect_Changed" Unchecked="ChkAutoDetect_Changed"/>
+                    <CheckBox x:Name="ChkAutoDetect" Content="Auto-detect pos.db path" Margin="0,8,0,0" Checked="ChkAutoDetect_Changed" Unchecked="ChkAutoDetect_Changed"/>
+                    <TextBlock x:Name="TxtDatabaseValidation" Style="{StaticResource StatusTextStyle}"/>
                 </StackPanel>
             </Border>
 
-            <!-- Save Buttons -->
-            <Border Grid.Row="5" Background="White" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button x:Name="BtnTestConnections" Content="🧪 Test All Connections" Padding="14,8" FontSize="12" Margin="0,0,10,0" Click="BtnTestConnections_Click" Style="{StaticResource TestButtonStyle}"/>
-                    <Button x:Name="BtnSave" Content="💾 Save Settings" Padding="16,8" FontSize="12" Click="BtnSave_Click" Style="{StaticResource SaveButtonStyle}"/>
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="OCR Struk Pembelian" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#7C3AED"/>
+
+                    <CheckBox x:Name="ChkOcrEnabled" Content="Aktifkan OCR struk via Telegram" Margin="0,0,0,8" Checked="ChkOcrEnabled_Changed" Unchecked="ChkOcrEnabled_Changed"/>
+
+                    <TextBlock Text="Caption Trigger" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtOcrTriggerCaption" Style="{StaticResource InputStyle}" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Kirim foto struk ke bot dengan caption ini untuk mengaktifkan OCR."/>
+
+                    <TextBlock Text="Tessdata Path" FontSize="11" Margin="0,8,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtTessdataPath" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,8,0"/>
+                        <Button x:Name="BtnBrowseTessdata" Grid.Column="1" Content="Browse" Style="{StaticResource SmallButtonStyle}" Click="BtnBrowseTessdata_Click"/>
+                    </Grid>
+
+                    <TextBlock Text="Engine Parser OCR" FontSize="12" FontWeight="SemiBold" Margin="0,14,0,6" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Mode Deteksi" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center" Foreground="#374151"/>
+                        <ComboBox x:Name="CmbParserMode" Grid.Column="1" Style="{StaticResource ComboStyle}" Width="220" HorizontalAlignment="Left" SelectedIndex="0" IsEnabled="False">
+                            <ComboBoxItem Content="Auto-Detect Vendor"/>
+                            <ComboBoxItem Content="Generic Parser"/>
+                        </ComboBox>
+                    </Grid>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Parsers aktif saat ini: AI parser + fallback parser lokal. Mapping produk dipakai sebelum restock dibuat."/>
+
+                    <TextBlock Text="Pemetaan Nama Produk (Faktur ke Database)" FontSize="12" FontWeight="SemiBold" Margin="0,14,0,6" Foreground="#374151"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Setup dulu di sini sebelum OCR dijalankan. Kolom kiri = nama di faktur/struk supplier. Kolom kanan = nama produk di database Aronium."/>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtMappingInvoiceName" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <TextBox x:Name="TxtMappingDbName" Grid.Column="1" Style="{StaticResource InputStyle}" Margin="0,0,6,0" IsReadOnly="True"/>
+                        <Button x:Name="BtnSearchDbProduct" Grid.Column="2" Content="Cari" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnSearchDbProduct_Click" ToolTip="Cari produk di database Aronium"/>
+                        <Button x:Name="BtnAddMapping" Grid.Column="3" Content="+ Tambah" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnAddMapping_Click"/>
+                    </Grid>
+
+                    <DataGrid x:Name="DgProductMappings"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              HeadersVisibility="Column"
+                              Height="180"
+                              FontSize="11"
+                              BorderBrush="#E5E7EB"
+                              BorderThickness="1"
+                              Margin="0,0,0,2">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Nama di Faktur" Width="*" Binding="{Binding InvoiceName}"/>
+                            <DataGridTextColumn Header="Produk di Database" Width="*" Binding="{Binding DatabaseProductName}"/>
+                            <DataGridTextColumn Header="ID" Width="80" Binding="{Binding DatabaseProductId}" IsReadOnly="True"/>
+                            <DataGridTemplateColumn Header="" Width="140">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Edit" Tag="{Binding InvoiceName}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnEditMapping_Click"/>
+                                            <Button Content="Hapus" Tag="{Binding InvoiceName}" Style="{StaticResource SmallButtonStyle}" Click="BtnDeleteMapping_Click"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock x:Name="TxtOcrValidation" Style="{StaticResource StatusTextStyle}"/>
                 </StackPanel>
             </Border>
-        </Grid>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <TextBlock Text="Google Sheets Export" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#0F766E"/>
+
+                    <CheckBox x:Name="ChkSheetsEnabled" Content="Aktifkan export ke Google Sheets" Margin="0,0,0,8" Checked="ChkSheetsEnabled_Changed" Unchecked="ChkSheetsEnabled_Changed"/>
+
+                    <TextBlock Text="Service Account JSON Path" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtSheetsCredentialPath" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,8,0"/>
+                        <Button x:Name="BtnBrowseSheetsCredential" Grid.Column="1" Content="Browse" Style="{StaticResource SmallButtonStyle}" Click="BtnBrowseSheetsCredential_Click"/>
+                    </Grid>
+
+                    <TextBlock Text="Spreadsheet ID" FontSize="11" Margin="0,8,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtSheetsSpreadsheetId" Style="{StaticResource InputStyle}" Margin="0,0,0,4"/>
+
+                    <TextBlock Text="Nama Sheet Tab Pembelian" FontSize="11" Margin="0,8,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtSheetsPurchaseTabName" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnTestSheets" Content="Test Koneksi Sheets" Style="{StaticResource SmallButtonStyle}" Click="BtnTestSheets_Click"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="TxtSheetsValidation" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Unit Conversion Mapping" FontSize="14" FontWeight="SemiBold" Foreground="#1D4ED8"/>
+                            <TextBlock Text="Saat produk induk seperti dus/box dibeli dari OCR, stok produk anak seperti pcs/renceng bisa ditambah otomatis sesuai rasio ini." Style="{StaticResource HelpTextStyle}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <Button x:Name="BtnRefreshUnitConversions" Grid.Column="1" Content="Refresh" Style="{StaticResource SmallButtonStyle}" Click="BtnRefreshUnitConversions_Click"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtConversionParentName" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <Button x:Name="BtnSearchParentConversionProduct" Grid.Column="1" Content="Cari Induk" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnSearchParentConversionProduct_Click"/>
+                        <TextBox x:Name="TxtConversionChildName" Grid.Column="2" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <Button x:Name="BtnSearchChildConversionProduct" Grid.Column="3" Content="Cari Anak" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnSearchChildConversionProduct_Click"/>
+                        <TextBox x:Name="TxtConversionRate" Grid.Column="4" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <Button x:Name="BtnAddUnitConversion" Grid.Column="5" Content="+ Simpan" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnAddUnitConversion_Click"/>
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Urutan input: pilih produk induk, pilih produk anak, lalu isi rasio. Contoh 1 dus = 40 pcs, maka isi 40." Margin="0,0,0,8"/>
+
+                    <DataGrid x:Name="DgUnitConversions"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              HeadersVisibility="Column"
+                              Height="190"
+                              FontSize="11"
+                              BorderBrush="#E5E7EB"
+                              BorderThickness="1"
+                              Margin="0,0,0,2">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Produk Induk" Width="*" Binding="{Binding ParentProductName}"/>
+                            <DataGridTextColumn Header="Produk Anak" Width="*" Binding="{Binding ChildProductName}"/>
+                            <DataGridTextColumn Header="Rasio" Width="90" Binding="{Binding ConversionRate, StringFormat=N2}"/>
+                            <DataGridTemplateColumn Header="" Width="140">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Edit" Tag="{Binding Id}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnEditUnitConversion_Click"/>
+                                            <Button Content="Hapus" Tag="{Binding Id}" Style="{StaticResource SmallButtonStyle}" Click="BtnDeleteUnitConversion_Click"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock x:Name="TxtUnitConversionStatus" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="OCR Review Queue" FontSize="14" FontWeight="SemiBold" Foreground="#B45309"/>
+                            <TextBlock Text="Item OCR yang belum yakin akan masuk antrean ini. Pilih produk yang benar untuk membuat purchase document dan menyimpan alias belajar." Style="{StaticResource HelpTextStyle}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <Button x:Name="BtnRefreshOcrQueue" Grid.Column="1" Content="Refresh" Style="{StaticResource SmallButtonStyle}" Click="BtnRefreshOcrQueue_Click"/>
+                    </Grid>
+
+                    <DataGrid x:Name="DgOcrReviewQueue"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              HeadersVisibility="Column"
+                              Height="220"
+                              FontSize="11"
+                              BorderBrush="#E5E7EB"
+                              BorderThickness="1">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Tanggal" Width="100" Binding="{Binding ReceiptDate, StringFormat=dd/MM/yyyy}"/>
+                            <DataGridTextColumn Header="Supplier" Width="160" Binding="{Binding SupplierName}"/>
+                            <DataGridTextColumn Header="Nama OCR" Width="*" Binding="{Binding RawProductName}"/>
+                            <DataGridTextColumn Header="Qty" Width="70" Binding="{Binding Quantity}"/>
+                            <DataGridTextColumn Header="Isi" Width="55" Binding="{Binding IsiPerBox}"/>
+                            <DataGridTextColumn Header="Harga" Width="90" Binding="{Binding UnitPrice, StringFormat=N0}"/>
+                            <DataGridTextColumn Header="Kandidat" Width="220" Binding="{Binding CandidateSummary}"/>
+                            <DataGridTemplateColumn Header="" Width="150">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Proses" Tag="{Binding Id}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnResolveOcrQueue_Click"/>
+                                            <Button Content="Hapus" Tag="{Binding Id}" Style="{StaticResource SmallButtonStyle}" Click="BtnDeleteOcrQueue_Click"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock x:Name="TxtOcrQueueStatus" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Background="White" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="BtnTestConnections" Content="Test All Connections" Padding="14,8" FontSize="12" Margin="0,0,10,0" Click="BtnTestConnections_Click" Style="{StaticResource SmallButtonStyle}"/>
+                    <Button x:Name="BtnSave" Content="Save Settings" Padding="16,8" FontSize="12" Click="BtnSave_Click" Style="{StaticResource SaveButtonStyle}"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
     </ScrollViewer>
 </UserControl>

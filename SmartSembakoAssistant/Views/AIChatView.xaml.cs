@@ -87,7 +87,10 @@ namespace SmartSembakoAssistant.Views
             if (CmbPromptMode.SelectedItem is ComboBoxItem selectedItem && selectedItem.Tag is string mode)
             {
                 _currentMode = mode;
-                TxtStatus.Text = $"Mode: {_currentMode}";
+                if (TxtStatus != null)
+                {
+                    TxtStatus.Text = $"Mode: {_currentMode}";
+                }
             }
         }
 

@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using SmartSembakoAssistant.Helpers;
 using SmartSembakoAssistant.Services;
 
 namespace SmartSembakoAssistant.Views
@@ -12,7 +13,7 @@ namespace SmartSembakoAssistant.Views
         private readonly DatabaseService _databaseService;
         private readonly LoggingService _loggingService;
         private readonly PosDbService? _posDbService;
-        private readonly TelegramBotService? _botService;
+        private readonly BotController? _botController;
         private DispatcherTimer? _autoRefreshTimer;
 
         public DashboardView(
@@ -20,7 +21,7 @@ namespace SmartSembakoAssistant.Views
             DatabaseService databaseService,
             LoggingService loggingService,
             PosDbService? posDbService,
-            TelegramBotService? botService)
+            BotController? botController)
         {
             InitializeComponent();
 
@@ -28,7 +29,7 @@ namespace SmartSembakoAssistant.Views
             _databaseService = databaseService;
             _loggingService = loggingService;
             _posDbService = posDbService;
-            _botService = botService;
+            _botController = botController;
 
             LoadDashboardData();
             SetupAutoRefresh();
@@ -71,16 +72,24 @@ namespace SmartSembakoAssistant.Views
             try
             {
                 // Bot status
-                if (_botService != null && _botService.IsRunning)
+                var integration = _botController?.GetIntegrationStatus();
+                if (_botController != null && _botController.IsRunning)
                 {
-                    TxtBotStatus.Text = "Running";
+                    bool anyPrimary = integration?.TelegramRunning == true || integration?.WhatsAppRunning == true || integration?.BaileysRunning == true;
+                    TxtBotStatus.Text = anyPrimary ? "Runtime On" : "Runtime Partial";
                     TxtBotStatus.Foreground = (Brush)new BrushConverter().ConvertFrom("#10B981")!;
+                    TxtBotUptime.Text = $"TG: {(integration?.TelegramRunning == true ? "On" : "Off")} | WA Cloud: {(integration?.WhatsAppRunning == true ? "On" : "Off")} | Baileys: {(integration?.BaileysRunning == true ? "On" : "Off")} | Tunnel: {(integration?.TunnelRunning == true ? "On" : "Off")}";
                 }
                 else
                 {
-                    TxtBotStatus.Text = "Stopped";
+                    TxtBotStatus.Text = "Runtime Off";
                     TxtBotStatus.Foreground = (Brush)new BrushConverter().ConvertFrom("#EF4444")!;
+                    TxtBotUptime.Text = "WA Cloud: Off | Baileys: Off | Tunnel: Off";
                 }
+
+                TxtIntegrationSummary.Text = integration == null
+                    ? "Telegram, WhatsApp, webhook, dan outbox belum diinisialisasi."
+                    : $"Mode WA: {integration.WhatsAppMode} | WA webhook: {(integration.WhatsAppRunning ? "aktif" : "mati")} | Cloud outbound: {(integration.WhatsAppCloudOutboundReady ? "siap kirim" : "belum siap")} | Baileys: {(integration.BaileysOutboundReady ? "siap kirim" : integration.BaileysConfigured ? "terputus/menunggu pairing" : "mati")} | Pairing: {(integration.BaileysPaired ? "terhubung" : integration.BaileysConfigured ? "menunggu pairing" : "-")} | Signature: {(integration.SignatureValidationEnabled ? "aktif" : "local/test")} | Outbox: {integration.PendingOutboundCount} | Last webhook: {FormatTimestamp(integration.LastWebhookReceivedAt)} | Last sent: {FormatTimestamp(integration.LastOutboundSentAt)}";
 
                 // Groq status - TEST API CALL dulu sebelum tampilkan "Connected"
                 var config = _configService.Config;
@@ -124,7 +133,7 @@ namespace SmartSembakoAssistant.Views
                 {
                     TxtDbStatus.Text = "Connected";
                     TxtDbStatus.Foreground = (Brush)new BrushConverter().ConvertFrom("#10B981")!;
-                    TxtDbPath.Text = "Path: pos.db";
+                    TxtDbPath.Text = $"Outbox pending: {integration?.PendingOutboundCount ?? 0}";
                 }
                 else
                 {
@@ -136,7 +145,7 @@ namespace SmartSembakoAssistant.Views
                 var conversations = await _databaseService.GetRecentConversationsAsync(null, 1000);
                 TxtMemoryCount.Text = $"{conversations.Count} conversations";
 
-                string dbPath = "data\\memory.db";
+                string dbPath = RuntimePaths.MemoryDatabasePath;
                 if (System.IO.File.Exists(dbPath))
                 {
                     long sizeInBytes = new System.IO.FileInfo(dbPath).Length;
@@ -202,6 +211,11 @@ namespace SmartSembakoAssistant.Views
         public async Task LoadDataAsync()
         {
             LoadDashboardData();
+        }
+
+        private static string FormatTimestamp(DateTime? value)
+        {
+            return value.HasValue ? value.Value.ToString("dd/MM HH:mm:ss") : "-";
         }
     }
 }

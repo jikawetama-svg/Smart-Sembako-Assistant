@@ -44,8 +44,13 @@ namespace SmartSembakoAssistant.Models
     public class ParsedReceipt
     {
         public string? StoreName { get; set; }
+        public string? SupplierName { get; set; }
+        public string? BuyerName { get; set; }
+        public string? VendorType { get; set; }
         public DateTime? Date { get; set; }
+        public string? RawDateText { get; set; }
         public string? ReceiptNumber { get; set; }
+        public bool IsLastPage { get; set; }
         public List<ReceiptItem>? Items { get; set; }
         public decimal? Total { get; set; }
         public decimal? Tax { get; set; }
@@ -55,7 +60,10 @@ namespace SmartSembakoAssistant.Models
     public class ReceiptItem
     {
         public string? ProductName { get; set; }
+        public decimal? QtyBox { get; set; }
+        public int? IsiPerBox { get; set; }
         public decimal? Quantity { get; set; }
+        public string? Unit { get; set; }
         public decimal? UnitPrice { get; set; }
         public decimal? Total { get; set; }
     }

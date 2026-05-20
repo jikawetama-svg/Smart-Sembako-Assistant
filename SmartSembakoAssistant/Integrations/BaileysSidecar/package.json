@@ -1,0 +1,19 @@
+{
+  "name": "smart-sembako-baileys-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Baileys sidecar for Smart Sembako Assistant",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc11",
+    "pino": "^9.3.2",
+    "qrcode": "^1.5.4"
+  },
+  "overrides": {
+    "protobufjs": "^7.5.5"
+  }
+}

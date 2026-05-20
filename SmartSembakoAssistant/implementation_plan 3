@@ -1,0 +1,423 @@
+# 🚀 Implementation Plan Phase 2: Date Range Parsing + Piutang/Kredit Pelanggan
+
+## Ringkasan
+
+Berdasarkan percakapan test terbaru (03/05/2026 malam), ditemukan **3 area yang perlu diperbaiki/ditambah**:
+
+| Area | Status | Prioritas |
+|------|--------|-----------|
+| Bug: `Ekspor` (tanpa kata "PELANGGAN") tidak dikenali → masuk AI | 🔴 Bug | Tinggi |
+| Bug: `YA` setelah ringkasan tidak konfirmasi (pending export hilang) | 🔴 Bug | Tinggi |
+| Bug: `Cek data penjualan 7 hari ini` → "Produk tidak ditemukan" | 🔴 Bug | Tinggi |
+| Fitur: Date range parsing diperluas (bulan lalu, minggu lalu, N hari, tanggal spesifik, nama bulan, tahun, custom range) | 🟡 Fitur | Sedang |
+| Fitur: Piutang/kredit pelanggan (daftar, total, detail, export) | 🟡 Fitur | Sedang |
+
+---
+
+## 🔴 Prioritas 0: Bug Fixes dari Test Terbaru
+
+### Bug 1 — `Ekspor` tanpa suffix tidak dikenali
+
+**Bukti dari chat:**
+```
+User: Ekspor
+Bot:  Mohon maaf, saya tidak bisa mengekspor data secara langsung...
+```
+
+**Root Cause:**
+`DetectDeterministicIntent()` hanya mengenali `"EKSPOR PELANGGAN"`, `"EKSPOR SUPPLIER"`, dll. Kata `"ekspor"` saja masuk ke AI.
+
+**Fix:**
+Di `DetectDeterministicIntent()`, tambahkan fallback: jika normalized mengandung `"ekspor"` atau `"export"` saja (tanpa suffix), cek `_pendingExportBySender` — jika ada pending, anggap sebagai konfirmasi. Atau tampilkan pilihan:
+```
+❓ Mau ekspor apa?
+• EKSPOR PELANGGAN
+• EKSPOR SUPPLIER  
+• EKSPOR PENJUALAN
+• EKSPOR STOK
+```
+
+---
+
+### Bug 2 — `YA` setelah ringkasan penjualan tidak diproses
+
+**Bukti dari chat:**
+```
+User: Penjualan hari ini   → Bot: tampil ringkasan + "Balas YA..."
+User: Ya                   → Bot: "Tidak ada export yang sedang menunggu konfirmasi."
+User: YA                   → Bot: (sama)
+```
+
+**Root Cause:**
+`DetectDeterministicIntent()` memetakan `"YA"` ke intent `"confirm_export"`. Tapi `HandlePendingExportConfirmationAsync()` tidak menemukan pending karena `SetPendingExport()` dipanggil dengan context yang mungkin berbeda antara request pertama dan kedua, atau karena normalisasi `"Ya"` (kapital campur) tidak cocok dengan trigger `"ya"`.
+
+**Fix yang Perlu Dicek:**
+1. Pastikan `NormalizeText("Ya")` menghasilkan `"ya"` (lowercase) dan match dengan trigger `confirm_export`
+2. Pastikan `BuildSenderStateKey()` konsisten antara dua request yang sama
+3. Kemungkinan bug: `SetPendingExport()` dipanggil di dalam `HandleSalesSummaryAsync()` tapi `HandleSalesSummaryAsync()` bisa saja mengembalikan "tidak ada data" sehingga tidak set pending → cek kondisi ini
+
+**Fix tambahan:** Extend TTL pending export — jika pending hilang karena timeout atau bug, bot harus memberi feedback yang lebih jelas:
+```
+❌ Tidak ada export yang menunggu.
+Coba ketik: EKSPOR PENJUALAN HARI INI
+```
+
+---
+
+### Bug 3 — "Cek data penjualan 7 hari ini" → masuk ke `/stok`
+
+**Bukti dari chat:**
+```
+User: Cek data penjualan 7 hari ini
+Bot:  Produk "7 hari ini" tidak ditemukan.
+```
+
+**Root Cause:**
+Kalimat `"cek data penjualan 7 hari ini"` tidak cocok dengan trigger `sales_summary` di `DetectDeterministicIntent()`. Trigger saat ini hanya mendeteksi kata `"penjualan"` + `"hari ini"/"minggu"/"bulan"`. Karena tidak cocok, masuk ke `HandleNaturalLanguageAsync()`, lalu AI mungkin salah interpretasi sebagai stok search.
+
+**Fix:**
+Di `DetectDeterministicIntent()`, perluas trigger `sales_summary`:
+- Tambahkan pattern: `"data penjualan"`, `"cek penjualan"`, `"info penjualan"`
+- Tambahkan pattern: `"N hari"` → map ke period `"last_N_days"`
+
+---
+
+## 🟡 Fitur 1: Enhanced Date Range Parsing
+
+### Kondisi Sekarang
+
+`DetectSalesPeriod()` dan `ResolveSalesPeriod()` hanya support:
+
+| Input | Hasil |
+|-------|-------|
+| "hari ini" | today → today |
+| "kemarin" | yesterday → yesterday |
+| "minggu ini" | start of week → today |
+| "bulan ini" | start of month → today |
+| apapun lain | fallback → today |
+
+### Yang Gagal dari Test:
+
+| Input User | Hasil Sekarang | Harusnya |
+|------------|----------------|---------|
+| `Penjualan 30 hari terakhir` | today | today - 30 → today |
+| `Penjualan 20 Oktober 2025 sampai hari ini` | salah masuk ke stok | 20/10/2025 → today |
+| `Penjualan februari` | today | 01/02/2025 → 28/02/2025 |
+| `Omzet bulan lalu` | AI: "tidak tersedia" | 01/04 → 30/04 |
+| `Omzet minggu lalu` | AI: "tidak dapat ditentukan" | Senin-Minggu minggu lalu |
+| `Laporan penjualan tanggal 01` | today | 01/05/2026 → 01/05/2026 |
+
+### Proposed Changes
+
+#### [MODIFY] `DetectSalesPeriod(string normalized)` di AutomationEngine.cs
+
+Ubah dari simple keyword match menjadi multi-pass parser:
+
+```
+Pass 1: Cek keyword sederhana (kemarin, hari ini, minggu ini, bulan ini)
+Pass 2: Cek "bulan lalu" → period: "last_month"
+Pass 3: Cek "minggu lalu" → period: "last_week"
+Pass 4: Cek "N hari terakhir" / "N hari ini" → period: "last_N_days:30"
+Pass 5: Cek nama bulan Indonesia (januari–desember) → period: "month_name:februari"
+Pass 6: Cek "tanggal N" atau "tgl N" → period: "specific_day:1"
+Pass 7: Cek "tahun YYYY" → period: "year:2025"
+Pass 8: Cek rentang "DD MMMM YYYY sampai/hingga DD MMMM YYYY" → period: "range:2025-10-20:2026-05-03"
+Pass 9: Fallback → "today"
+```
+
+Semua period dikodekan sebagai **string terstruktur** yang diteruskan sebagai `Argument` ke `ResolveSalesPeriod()`.
+
+#### [MODIFY] `ResolveSalesPeriod(string? period)` di AutomationEngine.cs
+
+Ubah menjadi parser yang bisa decode semua format di atas:
+
+```csharp
+private static (DateTime Start, DateTime End, string PeriodKey, string TitleLabel, string DateLabel)
+    ResolveSalesPeriod(string? period)
+{
+    // Decode: "last_month", "last_week", "last_N_days:30",
+    //         "month_name:februari", "specific_day:1",
+    //         "year:2025", "range:2025-10-20:2026-05-03"
+}
+```
+
+**Mapping nama bulan Indonesia:**
+```csharp
+private static readonly Dictionary<string, int> IndonesianMonths = new(StringComparer.OrdinalIgnoreCase)
+{
+    {"januari",1},{"februari",2},{"maret",3},{"april",4},
+    {"mei",5},{"juni",6},{"juli",7},{"agustus",8},
+    {"september",9},{"oktober",10},{"november",11},{"desember",12}
+};
+```
+
+**Contoh output ResolveSalesPeriod:**
+
+| Period string | Start | End | TitleLabel |
+|---------------|-------|-----|-----------|
+| `"last_month"` | 01 Apr 2026 | 30 Apr 2026 | Bulan Lalu |
+| `"last_week"` | 27 Apr (Sen) | 03 Mei (Ming) lalu | Minggu Lalu |
+| `"last_N_days:30"` | today-30 | today | 30 Hari Terakhir |
+| `"month_name:februari"` | 01 Feb tahun ini | 28 Feb | Februari 2026 |
+| `"specific_day:1"` | 01 Mei 2026 | 01 Mei 2026 | 01 Mei 2026 |
+| `"year:2025"` | 01 Jan 2025 | 31 Des 2025 | Tahun 2025 |
+| `"range:2025-10-20:2026-05-03"` | 20 Okt 2025 | 03 Mei 2026 | 20 Okt 2025 - 03 Mei 2026 |
+
+#### [MODIFY] `DetectDeterministicIntent()` — Perluas trigger sales_summary
+
+Tambahkan keyword baru yang masuk ke `sales_summary`:
+- `"data penjualan"`, `"cek penjualan"`, `"laporan penjualan"` (sudah ada), `"info penjualan"`
+- `"omzet bulan lalu"`, `"omzet minggu lalu"`, `"omzet tahun ini"`
+- `"penjualan [nama bulan]"` → deteksi jika ada nama bulan di kalimat
+- `"penjualan [N] hari"` → deteksi pola `\d+ hari`
+
+#### [MODIFY] `HandleSalesSummaryAsync()` — Update title label
+
+Gunakan `TitleLabel` dari `ResolveSalesPeriod()` secara dinamis:
+```
+📊 Ringkasan Penjualan Bulan Lalu (01 Apr - 30 Apr 2026)
+📊 Ringkasan Penjualan 30 Hari Terakhir (03 Apr - 03 Mei 2026)
+📊 Ringkasan Penjualan Februari 2026 (01 Feb - 28 Feb 2026)
+```
+
+---
+
+## 🟡 Fitur 2: Piutang/Kredit Pelanggan
+
+### Latar Belakang
+
+Di database Aronium, skema `Document` memiliki kolom:
+- `PaidStatus` — `0` = sudah dibayar / tunai, `1` = belum dibayar (kredit/piutang)
+- `DueDate` — tanggal jatuh tempo
+- `CustomerId` — relasi ke tabel `Customer`
+- `DocumentTypeId = 2` — penjualan (Sales)
+
+Jadi piutang = **Sales dokumen (`DocumentTypeId = 2`) dengan `PaidStatus = 1` (belum lunas)**.
+
+> [!IMPORTANT]
+> Di kode comment Aronium: `PaidStatus = 1` = **Tidak Dibayar**. Jadi query piutang: `WHERE DocumentTypeId = 2 AND PaidStatus = 1`
+
+### Fitur yang Diinginkan
+
+| User Input | Bot Action |
+|------------|-----------|
+| `"daftar piutang"` / `"daftar hutang"` / `"hutang pelanggan"` | Tampil ringkasan piutang per pelanggan |
+| `"total piutang"` | Tampil grand total semua piutang |
+| `"piutang wawan"` / `"hutang wawan"` | Tampil detail piutang pelanggan Wawan |
+| `/pelanggan wawan` (detail) | Tambahkan info piutang di respons detail pelanggan |
+| `"EKSPOR PIUTANG"` | Kirim file CSV semua piutang |
+
+### Proposed Changes
+
+#### [NEW] `PosDbService.GetCustomerReceivablesAsync()` — Daftar piutang semua pelanggan
+
+```csharp
+public async Task<List<CustomerReceivable>> GetCustomerReceivablesAsync()
+// Query: SELECT c.Id, c.Name, c.PhoneNumber,
+//               COUNT(d.Id) as InvoiceCount,
+//               SUM(d.Total) as TotalOwed,
+//               MIN(d.DueDate) as OldestDueDate,
+//               MAX(d.Date) as LastTransactionDate
+//        FROM Customer c
+//        INNER JOIN Document d ON c.Id = d.CustomerId
+//        WHERE d.DocumentTypeId = 2 AND d.PaidStatus = 1
+//        GROUP BY c.Id
+//        ORDER BY TotalOwed DESC
+```
+
+**Model baru `CustomerReceivable`:**
+```csharp
+public class CustomerReceivable
+{
+    public string? CustomerId { get; set; }
+    public string CustomerName { get; set; } = "";
+    public string? Phone { get; set; }
+    public int InvoiceCount { get; set; }       // jumlah faktur belum lunas
+    public decimal TotalOwed { get; set; }      // total hutang
+    public DateTime? OldestDueDate { get; set; } // jatuh tempo tertua
+    public DateTime? LastTransactionDate { get; set; }
+}
+```
+
+---
+
+#### [NEW] `PosDbService.GetCustomerReceivableDetailAsync(string customerId)` — Detail piutang 1 pelanggan
+
+```csharp
+public async Task<List<ReceivableInvoice>> GetCustomerReceivableDetailAsync(string customerId)
+// Query: SELECT d.Number, d.Date, d.DueDate, d.Total
+//        FROM Document d
+//        WHERE d.CustomerId = @customerId
+//          AND d.DocumentTypeId = 2
+//          AND d.PaidStatus = 1
+//        ORDER BY d.Date DESC
+```
+
+**Model baru `ReceivableInvoice`:**
+```csharp
+public class ReceivableInvoice
+{
+    public string? DocumentNumber { get; set; }
+    public DateTime? Date { get; set; }
+    public DateTime? DueDate { get; set; }
+    public decimal Total { get; set; }
+}
+```
+
+---
+
+#### [NEW] `PosDbService.GetTotalReceivableAsync()` — Grand total piutang
+
+```csharp
+public async Task<decimal> GetTotalReceivableAsync()
+// SELECT COALESCE(SUM(Total), 0) FROM Document
+// WHERE DocumentTypeId = 2 AND PaidStatus = 1
+```
+
+---
+
+#### [MODIFY] `CsvExportHelper.cs` — Tambah method baru
+
+```csharp
+public static string GenerateReceivableCsv(IEnumerable<CustomerReceivable> receivables)
+// Kolom: No, Nama Pelanggan, HP, Jumlah Faktur, Total Hutang, Jatuh Tempo Tertua
+```
+
+---
+
+#### [MODIFY] `DetectDeterministicIntent()` — Tambah 3 intent piutang
+
+| Intent Kind | Trigger Keyword | OwnerOnly |
+|-------------|----------------|-----------|
+| `receivables_list` | "piutang", "hutang pelanggan", "daftar piutang", "daftar hutang", "kredit pelanggan" | ✅ |
+| `receivables_detail` | "piutang [nama]", "hutang [nama]" | ✅ |
+| `export_receivables` | "EKSPOR PIUTANG", "ekspor hutang", "export piutang" | ✅ |
+
+**Logic extract nama untuk `receivables_detail`:**
+```csharp
+// Jika normalized contains "piutang" atau "hutang":
+//   Ekstrak kata setelah keyword sebagai nama pelanggan
+string? name = ExtractKeywordAfterAny(userMessage, "piutang", "hutang");
+if (name != null && name.Length > 2) // minimal 3 karakter
+    return new DeterministicIntent { Kind = "receivables_detail", Argument = name, OwnerOnly = true };
+```
+
+---
+
+#### [NEW] `HandleReceivablesListAsync()` di AutomationEngine.cs
+
+```
+💳 PIUTANG PELANGGAN
+
+Total piutang: Rp 1.250.000 (3 pelanggan)
+
+1. Wawan      | 2 faktur | Rp 850.000  | JT: 15 Apr
+2. Hj. Yuyun  | 1 faktur | Rp 300.000  | JT: 20 Apr
+3. Owi        | 1 faktur | Rp 100.000  | JT: 30 Apr
+
+📄 Ketik EKSPOR PIUTANG untuk file CSV lengkap.
+```
+
+---
+
+#### [NEW] `HandleReceivableDetailAsync(string name)` di AutomationEngine.cs
+
+```
+💳 PIUTANG - Wawan (085864106457)
+
+Total hutang: Rp 850.000 (2 faktur)
+
+  #000070 | 10 Apr | JT: 15 Apr | Rp 500.000
+  #000072 | 15 Apr | JT: 20 Apr | Rp 350.000
+
+⚠️ Ada 1 faktur melewati jatuh tempo!
+```
+
+---
+
+#### [NEW] `HandleExportReceivablesAsync()` di AutomationEngine.cs
+
+Flow identik dengan export pelanggan:
+1. `GetCustomerReceivablesAsync()` → semua piutang
+2. `CsvExportHelper.GenerateReceivableCsv(receivables)` → CSV
+3. Kirim file via `SendDocumentAsync()`
+4. Return: `"✅ File CSV piutang telah dikirim. (3 pelanggan, total Rp 1.250.000)"`
+
+---
+
+#### [MODIFY] `HandleCustomersAsync(string args)` — Tambah info piutang di detail pelanggan
+
+Ketika user cari pelanggan dengan nama (ada args), tambahkan baris piutang di output:
+
+```
+👥 PELANGGAN - "wawan"
+
+  Wawan
+  📱 HP    : 085864106457
+  📧 Email : -
+  🛒 Transaksi: 24 | Total belanja: Rp 8.302.150
+  📅 Terakhir: 23 Apr 2026
+
+  💳 Piutang: Rp 850.000 (2 faktur belum lunas)
+```
+
+Implementasi: setelah dapat `customerId`, panggil `GetCustomerReceivableDetailAsync(customerId)` dan hitung total.
+
+---
+
+#### [MODIFY] `BuildRealStoreDataAsync()` — Tambah piutang ke AI context
+
+Tambahkan ke context AI:
+```csharp
+decimal totalReceivable = await _posDbService.GetTotalReceivableAsync();
+if (totalReceivable > 0)
+    sb.AppendLine($"Total piutang pelanggan (belum lunas): Rp {totalReceivable:N0}");
+```
+
+Sehingga AI bisa menjawab "berapa total piutang?" dengan angka yang benar.
+
+---
+
+## 📁 Ringkasan File yang Akan Diubah
+
+| File | Action | Perubahan |
+|------|--------|-----------|
+| `Services/AutomationEngine.cs` | **[MODIFY]** | Fix 3 bug, perluas DetectSalesPeriod + ResolveSalesPeriod, 3 intent baru piutang, 3 handler baru piutang, update HandleCustomersAsync (detail), update BuildRealStoreDataAsync |
+| `Services/PosDbService.cs` | **[MODIFY]** | 3 method baru: GetCustomerReceivablesAsync, GetCustomerReceivableDetailAsync, GetTotalReceivableAsync |
+| `Helpers/CsvExportHelper.cs` | **[MODIFY]** | Tambah GenerateReceivableCsv() |
+| `Models/` | **[MODIFY/NEW]** | Tambah model `CustomerReceivable` dan `ReceivableInvoice` |
+
+---
+
+## 🔍 Analisis Bug Root Cause (Perlu Dicek di Kode Sebelum Fix)
+
+> [!IMPORTANT]
+> Sebelum implementasi Bug 2 (YA tidak diproses), perlu dicek dua hal:
+> 1. Apakah `SetPendingExport()` dipanggil bahkan ketika `totalTransactions == 0`? (Jika tidak dipanggil karena "tidak ada data", maka pending tidak ter-set)
+> 2. Apakah normalisasi `"Ya"` → `"ya"` benar-benar match trigger `confirm_export`?
+
+---
+
+## ✅ Verification Plan
+
+### Test Manual via Telegram:
+
+| # | Input | Expected |
+|---|-------|----------|
+| 1 | `Omzet bulan lalu` | Ringkasan April 2026 |
+| 2 | `Penjualan 30 hari terakhir` | Ringkasan 30 hari ke belakang |
+| 3 | `Penjualan februari` | Ringkasan Februari 2026 |
+| 4 | `Penjualan 20 Oktober 2025 sampai hari ini` | Ringkasan 20 Okt 2025 – 03 Mei 2026 |
+| 5 | `Cek data penjualan 7 hari ini` | Ringkasan 7 hari terakhir (bukan "produk tidak ditemukan") |
+| 6 | `Laporan penjualan hari ini` → `YA` | Set pending → YA trigger export |
+| 7 | `Ekspor` (saja) | Menu pilihan atau cek pending |
+| 8 | `Daftar piutang` | List piutang semua pelanggan |
+| 9 | `Piutang wawan` | Detail piutang Wawan |
+| 10 | `EKSPOR PIUTANG` | File CSV piutang dikirim |
+| 11 | `/pelanggan wawan` | Tampil info + baris piutang Rp xxx |
+| 12 | `Total piutang berapa?` | AI jawab angka benar dari context |
+
+### Build:
+```bash
+dotnet build SmartSembakoAssistant/SmartSembakoAssistant.csproj
+```

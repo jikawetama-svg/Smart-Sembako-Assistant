@@ -1,0 +1,7 @@
+SMART SEMBAKO ASSISTANT - CATATAN INSTALASI
+
+1. Installer dapat dipasang ke drive selain C: melalui halaman pemilihan folder instalasi.
+2. Data aplikasi mode install disimpan di profile user Windows agar update lebih aman.
+3. Installer v5.0.1 hanya menyediakan mode admin install ke Program Files dan tidak menampilkan opsi portable di wizard.
+4. Runtime WhatsApp lokal Baileys dan cloudflared sudah dibundel. User tidak perlu install Node.js atau cloudflared manual.
+5. Jika aplikasi sedang berjalan saat update, setup akan meminta menutup aplikasi terlebih dahulu.

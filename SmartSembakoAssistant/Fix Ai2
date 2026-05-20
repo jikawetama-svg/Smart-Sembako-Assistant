@@ -1,0 +1,63 @@
+# Analisa Percakapan Smart Sembako Assistant
+
+Berdasarkan tinjauan pada dokumen `PR percakapan.md`, berikut adalah analisis tentang apa yang sudah berjalan dengan baik (sesuai) dan apa yang masih menjadi kekurangan (minor issues) dari bot saat ini.
+
+## ✅ Yang Udah Sesuai (Kelebihan)
+1. **Struktur Perintah (Commands) Rapi**: Navigasi menggunakan menu seperti `/help`, `/stok`, `/laporan`, dan `/analisa` sudah sangat terstruktur dan merespons dengan cepat.
+2. **Formatting Laporan Bagus**: Output seperti laporan harian, statistik bisnis, dan daftar produk menggunakan format yang mudah dibaca (rapi dengan emoji, poin-poin, dan indentasi).
+3. **Paginasi Berjalan Lancar**: Fitur seperti `Lanjut produk` atau `Lanjut pelanggan` merespons dengan baik, menandakan *state management* untuk paginasi sudah berhasil.
+4. **Fungsi Ekspor (CSV/ZIP) Berfungsi Penuh**: Bot secara konsisten dan akurat dapat mengekspor data besar ketika diminta via command `/ekspor_lengkap` atau *natural language* "Ekspor produk".
+
+## ⚠️ Kekurangan (Minor Issues)
+1. **Konteks Obrolan (Memory) Terputus**: Bot kesulitan mengingat konteks dari pesan sebelumnya. 
+   - *Contoh*: User bertanya *"Kalo ganti nama toko bisa ga"* (Bot: Bisa). Lalu user bertanya *"Gimana caranya"*, Bot membalas *"Maaf, saya tidak bisa membantu Anda. Pertanyaan Anda tidak jelas."*
+2. **Fallback / Penolakan Terlalu Robotik & Bocor Prompt**: Ketika AI tidak bisa mengeksekusi sesuatu, balasannya sangat kaku dan membocorkan instruksi prompt.
+   - *Contoh*: *"Saya tidak memiliki akses ke dokumen pelanggan ipan, karena informasi tersebut tidak tersedia di data real toko sembako Teh Asiah yang disediakan."*
+3. **Gagal Mengekstrak Data Sederhana dari Sistem**: Bot mengklaim data "tidak tersedia" padahal data tersebut bisa dihitung atau ada di command lain.
+   - *Contoh*: Saat ditanya *"Jumlah transaksi"*, bot menjawab data tidak tersedia. Padahal di `/laporan` bot menampilkan jumlah transaksi harian.
+   - *Contoh*: Saat ditanya *"Cek dokumen pelanggan ipan"*, bot gagal mencari transaksi terkait pelanggan Ipan.
+4. **Repetisi Teks / Persona Glitch**: Sesekali bot mengulang kata secara tidak natural.
+   - *Contoh*: *"Laba bulan ini belum dapat dihitung karena data Harga Modal produk belum diinput. Belum diinput."*
+5. **Kesalahan Kalkulasi Piutang (Menggunakan Total, Bukan Balance)**: Bot keliru menampilkan utang pelanggan karena mengambil nilai `Total` (nilai keseluruhan transaksi) alih-alih `Balance` (sisa utang yang belum dibayar).
+6. **Halusinasi pada Daftar Pelanggan**: Ketika user menanyakan daftar pelanggan spesifik (misal: "daftar ke 30 pelanggan"), bot merespons dengan nama-nama fiktif (halusinasi) yang tidak ada di database.
+
+---
+
+## 🛠️ Implementation Plan (Rencana Perbaikan)
+
+> [!IMPORTANT]
+> **User Review Required**
+> Silakan periksa rencana perbaikan di bawah ini. Apakah ada tambahan skenario percakapan lain yang sering *error* atau terasa kurang pas?
+
+Berikut adalah langkah-langkah implementasi untuk menyelesaikan masalah minor di atas:
+
+### 1. Perbaikan Context Memory (Konteks Percakapan)
+- **Masalah**: Bot merespons *stateless* pada obrolan beruntun.
+- **Solusi**: Memastikan `GroqService` atau AI Router di `AutomationEngine.cs` menyisipkan *chat history* (3-5 pesan terakhir) saat melakukan *generation* pesan *Natural Language*, sehingga ketika user bilang *"Gimana caranya?"*, AI tahu itu merujuk pada *"mengganti nama toko"*.
+
+### 2. Penyesuaian System Prompt (Mengatasi Kebocoran & Jawaban Robotik)
+- **Masalah**: Jawaban seperti "tidak tersedia di data real toko sembako Teh Asiah yang disediakan".
+- **Solusi**: Mengubah *System Prompt* pada AI agar persona lebih natural sebagai Asisten Kasir. Menghapus tendensi AI untuk menyebutkan *"data simulasi"* atau *"data yang disediakan"*. Apabila fitur tidak ada (contoh: OCR Struk / Pengeluaran), bot diarahkan untuk membalas secara natural: *"Maaf, fitur pencatatan pengeluaran / OCR struk penjualan belum diaktifkan di sistem saat ini."*
+
+### 3. Penambahan Mapping Intent (NLP Router)
+- **Masalah**: Pertanyaan spesifik gagal dipetakan (seperti *jumlah transaksi* atau *dokumen pelanggan spesifik*).
+- **Solusi**: 
+  - Melatih/memperbaiki deteksi intent pada `HandleNaturalLanguageAsync` agar pertanyaan seperti *"jumlah transaksi"* me-meroute ke data laporan `GetSalesTransactionCountAsync`.
+  - Memperbaiki intent pencarian dokumen pelanggan agar bisa melakukan pencarian (search) berdasarkan nama pelanggan via `PosDbService` dan me-return daftar struk terakhir.
+
+### 4. Perbaikan Bug Kalkulasi Piutang (Total vs Balance)
+- **Masalah**: Query piutang menggunakan nominal *Total Transaksi* alih-alih sisa yang belum dibayar (*Balance*).
+- **Solusi**: Mengubah mapping atau query di `PosDbService.cs` pada *method* yang mengambil data piutang agar selalu menggunakan properti `Balance` sebagai nilai sisa hutang. 
+
+### 5. Penanganan Halusinasi Daftar Pelanggan
+- **Masalah**: Permintaan daftar pelanggan spesifik ("urutan ke 30 siapa") memicu respons halusinasi karena AI mencoba menjawab mandiri tanpa data.
+- **Solusi**: Menambahkan *intent* paginasi / pencarian *offset* ke NLP Router, atau secara tegas menolak pertanyaan spesifik indeks ("urutan ke-X") dan menyarankan `/pelanggan` atau `Lanjut pelanggan` jika sistem tidak di-*design* untuk *random access* per-indeks.
+
+### 6. Perbaikan Bug Repetisi Teks (Formatting)
+- **Masalah**: Teks *"Belum diinput. Belum diinput."*
+- **Solusi**: Mengaudit file servis (kemungkinan di `AutomationEngine.cs` pada metode `HandleZeroCostAsync` atau di instruksi prompt) yang menyebabkan pengulangan kalimat peringatan harga modal.
+
+### Verification Plan
+- **Manual Verification**: Menguji skenario percakapan di `PR percakapan.md` secara langsung dengan bot (misalnya bertanya: "bisa ganti nama toko?", lalu disusul "gimana caranya?").
+- **Manual Verification**: Meminta "jumlah transaksi" dan "cek dokumen pelanggan ipan" untuk memastikan bot memanggil database secara tepat.
+- **Manual Verification**: Mengecek detail piutang untuk satu pelanggan dan membandingkan sisa hutang (*Balance*) yang ditampilkan bot dengan database.

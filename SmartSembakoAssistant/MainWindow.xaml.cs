@@ -1,7 +1,9 @@
-﻿using System;
+using System;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using SmartSembakoAssistant.Controls;
 using SmartSembakoAssistant.Services;
 using SmartSembakoAssistant.Views;
 
@@ -12,6 +14,7 @@ namespace SmartSembakoAssistant
         private readonly ConfigService _configService;
         private readonly DatabaseService _databaseService;
         private readonly LoggingService _loggingService;
+        private readonly SetupReadinessService _setupReadinessService;
         private PosDbService? _posDbService;
         private BotController? _botController;
         private DispatcherTimer? _uptimeTimer;
@@ -25,6 +28,8 @@ namespace SmartSembakoAssistant
             _configService = new ConfigService();
             _databaseService = new DatabaseService();
             _loggingService = new LoggingService(_databaseService);
+            _setupReadinessService = new SetupReadinessService(_configService);
+            _setupReadinessService.SeedDefaults();
 
             // Initialize PosDbService
             InitializePosDbService();
@@ -43,15 +48,28 @@ namespace SmartSembakoAssistant
             SetupUptimeTimer();
             SetupDateTimeTimer();
 
-            // Load dashboard
-            LoadDashboard();
+            if (_setupReadinessService.ShouldShowWizard())
+            {
+                UpdatePageTitle("Setup Cepat");
+                SetActiveButton(BtnDashboard);
+                LoadSetupWizard();
+            }
+            else
+            {
+                LoadDashboard();
+            }
         }
 
         private void InitializePosDbService()
         {
             try
             {
-                string? posDbPath = PosDbService.AutoDetectPosDbPath();
+                string? configuredPath = _configService.Config?.PosDb?.DatabasePath;
+                bool autoDetect = _configService.Config?.PosDb?.AutoDetect != false;
+                string? posDbPath = autoDetect
+                    ? PosDbService.AutoDetectPosDbPath() ?? configuredPath
+                    : configuredPath;
+
                 if (!string.IsNullOrEmpty(posDbPath))
                 {
                     _posDbService = new PosDbService(posDbPath, _loggingService);
@@ -60,6 +78,43 @@ namespace SmartSembakoAssistant
             catch (Exception ex)
             {
                 _loggingService.LogErrorAsync($"Error initializing PosDbService: {ex.Message}", "System");
+            }
+        }
+
+        public void RefreshConfiguredServices()
+        {
+            try
+            {
+                if (_botController?.IsRunning == true)
+                {
+                    return;
+                }
+
+                if (_botController != null && _botController.State != BotState.Stopped)
+                {
+                    _botController.StopAsync().GetAwaiter().GetResult();
+                }
+
+                InitializePosDbService();
+                if (_botController != null)
+                {
+                    _botController.OnStateChanged -= BotController_OnStateChanged;
+                }
+                _botController = new BotController(
+                    _configService,
+                    _databaseService,
+                    _loggingService,
+                    _posDbService);
+                _botController.OnStateChanged += BotController_OnStateChanged;
+
+                if (MainContent.Content is DashboardView dashboard)
+                {
+                    _ = dashboard.LoadDataAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogErrorAsync($"Error refreshing configured services: {ex.Message}", "System");
             }
         }
 
@@ -237,7 +292,7 @@ namespace SmartSembakoAssistant
 
             // Set active
             activeButton.Tag = "Active";
-            
+
             // Auto-hide sidebar after menu click
             DrawerColumn.Width = new GridLength(0);
             BtnDrawerToggle.Content = "☰";
@@ -255,11 +310,17 @@ namespace SmartSembakoAssistant
             {
                 BtnStartBot.IsEnabled = false;
                 bool started = await _botController!.StartAsync();
-                
+
                 if (!started)
                 {
-                    MessageBox.Show("❌ Gagal memulai bot. Periksa konfigurasi Anda.", "Error",
+                    string detail = _botController?.LastStartError ?? $"Periksa konfigurasi aktif di {_configService.ConfigPath}.";
+                    MessageBox.Show($"❌ Gagal memulai bot.\n\n{detail}", "Error",
                         MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                else if (_botController?.State == BotState.Error && !string.IsNullOrWhiteSpace(_botController.LastStartError))
+                {
+                    MessageBox.Show($"⚠️ Runtime berjalan sebagian.\n\n{_botController.LastStartError}", "Warning",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
             catch (Exception ex)
@@ -287,16 +348,16 @@ namespace SmartSembakoAssistant
         {
             try
             {
-                var result = MessageBox.Show("🔄 Restart bot? Bot akan stop lalu start kembali.", 
-                    "Confirm Restart", 
-                    MessageBoxButton.YesNo, 
+                var result = MessageBox.Show("🔄 Restart bot? Bot akan stop lalu start kembali.",
+                    "Confirm Restart",
+                    MessageBoxButton.YesNo,
                     MessageBoxImage.Question);
 
                 if (result == MessageBoxResult.Yes)
                 {
                     BtnRestartBot.IsEnabled = false;
                     bool restarted = await _botController!.RestartAsync();
-                    
+
                     if (!restarted)
                     {
                         MessageBox.Show("❌ Gagal restart bot.", "Error",
@@ -331,7 +392,7 @@ namespace SmartSembakoAssistant
                 msg += $"Revenue: Rp {revenue:N0}\n";
                 msg += $"Profit: Rp {profit:N0}\n";
                 msg += $"Transaksi: {transactions.Count}\n\n";
-                
+
                 if (transactions.Any())
                 {
                     msg += "Transaksi Terakhir:\n";
@@ -373,7 +434,7 @@ namespace SmartSembakoAssistant
 
                 string msg = $"⚠️ STOK MINUS TERDETEKSI\n\n";
                 msg += $"Ditemukan {minusProducts.Count} produk dengan stok minus:\n\n";
-                
+
                 foreach (var p in minusProducts.Take(10))
                 {
                     msg += $"• {p.Name}: {p.Stock} {p.Unit}\n";
@@ -416,7 +477,7 @@ namespace SmartSembakoAssistant
 
                 string msg = $"📦 REKOMENDASI RESTOCK\n\n";
                 msg += $"Produk dengan stok rendah (≤10):\n\n";
-                
+
                 foreach (var p in lowStockProducts.Take(10))
                 {
                     msg += $"• {p.Name}: {p.Stock} {p.Unit}\n";
@@ -485,41 +546,43 @@ namespace SmartSembakoAssistant
         {
             try
             {
-                var result = MessageBox.Show("🧪 Test semua koneksi?\n\n• Telegram Bot\n• AI (Groq)\n• Database",
+                var result = MessageBox.Show("🧪 Test semua koneksi?\n\n• Telegram\n• WhatsApp\n• Tunnel\n• AI\n• Database",
                     "Test Connections", MessageBoxButton.YesNo, MessageBoxImage.Question);
 
                 if (result != MessageBoxResult.Yes)
                     return;
 
                 string results = "🧪 HASIL TEST CONNECTIONS\n\n";
+                var status = _botController?.GetIntegrationStatus();
 
-                if (_posDbService != null)
+                results += $"📁 Config Aktif: {status?.ActiveConfigPath ?? _configService.ConfigPath}\n";
+                if (!string.IsNullOrWhiteSpace(status?.ConfigWarning))
                 {
-                    results += "💾 Database: ✅ Connected\n";
-                }
-                else
-                {
-                    results += "💾 Database: ❌ Not Connected\n";
+                    results += $"⚠️ Config Warning: {status.ConfigWarning}\n";
                 }
 
-                var config = _configService.Config;
-                if (config?.Groq?.ApiKey != null && config.Groq.ApiKey != "YOUR_GROQ_API_KEY")
+                results += $"📱 Telegram: {(status?.TelegramRunning == true ? "✅ Running" : status?.TelegramValidated == true ? "🟡 Validated" : status?.TelegramConfigured == true ? "⚠️ Configured" : "❌ Not Ready")}\n";
+                if (!string.IsNullOrWhiteSpace(status?.TelegramLastError))
                 {
-                    results += "🧠 Groq AI: ✅ Configured\n";
-                }
-                else
-                {
-                    results += "🧠 Groq AI: ❌ Not Configured\n";
+                    results += $"   ↳ {status.TelegramLastError}\n";
                 }
 
-                var botSvc = _botController?.GetBotService();
-                if (botSvc != null && botSvc.IsRunning)
+                results += $"💬 WhatsApp Listener: {(status?.WhatsAppRunning == true ? "✅ Running" : "❌ Not Running")}\n";
+                results += $"🔐 WhatsApp Cloud Auth: {(status?.WhatsAppCloudConfigured == true ? "✅ Configured" : "❌ Not Ready")}\n";
+                results += $"🧩 Baileys: {(status?.BaileysRunning == true ? "✅ Running" : status?.BaileysConfigured == true ? "🟡 Configured" : "❌ Not Ready")}\n";
+                results += $"   ↳ State: {status?.BaileysConnectionState ?? "-"} | Pairing: {(status?.BaileysPaired == true ? "Connected" : status?.BaileysPairingInProgress == true ? "In Progress" : "Waiting")}\n";
+                if (!string.IsNullOrWhiteSpace(status?.BaileysLastDisconnectReason) || status?.BaileysLastDisconnectStatusCode != null)
                 {
-                    results += "📱 Telegram Bot: ✅ Running\n";
+                    results += $"   ↳ Last Disconnect: {status?.BaileysLastDisconnectStatusCode?.ToString() ?? "-"} / {status?.BaileysLastDisconnectReason ?? "-"}\n";
                 }
-                else
+                results += $"🛡️ Signature Validation: {(status?.SignatureValidationEnabled == true ? "✅ Enabled" : "⚠️ Local/Test Only")}\n";
+                results += $"🌐 Tunnel: {(status?.TunnelRunning == true ? $"✅ {status.TunnelPublicUrl}" : "❌ Not Running")}\n";
+                results += $"📬 Outbox Pending: {status?.PendingOutboundCount ?? 0}\n";
+                results += $"🧠 Groq AI: {(status?.AiConfigured == true ? "✅ Configured" : "❌ Not Configured")}\n";
+                results += $"💾 Database: {(status?.DatabaseConnected == true ? "✅ Connected" : "❌ Not Connected")}\n";
+                if (!string.IsNullOrWhiteSpace(status?.PosDbSchemaStatus))
                 {
-                    results += "📱 Telegram Bot: ❌ Not Running\n";
+                    results += $"   ↳ Schema: {status.PosDbSchemaStatus}\n";
                 }
 
                 MessageBox.Show(results, "Test Connections", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -539,9 +602,41 @@ namespace SmartSembakoAssistant
                 _databaseService,
                 _loggingService,
                 _posDbService,
-                _botController?.GetBotService());
+                _botController);
 
             MainContent.Content = dashboardView;
+        }
+
+        private void LoadSetupWizard()
+        {
+            var wizardView = new SetupWizardView(_configService, _loggingService);
+            wizardView.SetupCompleted += SetupWizard_SetupCompleted;
+            wizardView.OpenAdvancedRequested += SetupWizard_OpenAdvancedRequested;
+            MainContent.Content = wizardView;
+        }
+
+        private void SetupWizard_OpenAdvancedRequested(object? sender, EventArgs e)
+        {
+            UpdatePageTitle("Settings");
+            SetActiveButton(BtnSettings);
+            LoadSettings();
+        }
+
+        private async void SetupWizard_SetupCompleted(object? sender, EventArgs e)
+        {
+            RefreshConfiguredServices();
+            UpdatePageTitle("Dashboard");
+            SetActiveButton(BtnDashboard);
+            LoadDashboard();
+
+            if (_botController != null && !_botController.IsRunning)
+            {
+                bool started = await _botController.StartAsync();
+                if (!started)
+                {
+                    ToastHelper.ShowWarning("Runtime", "Setup selesai, tetapi runtime belum aktif penuh. Cek Dashboard atau Settings untuk detail.", this);
+                }
+            }
         }
 
         private void LoadMonitoring()
@@ -596,7 +691,7 @@ namespace SmartSembakoAssistant
         private void LoadAIChat()
         {
             var groqService = new GroqService(_configService, _loggingService);
-            
+
             var aiChatView = new AIChatView(
                 _configService,
                 _databaseService,
@@ -605,6 +700,20 @@ namespace SmartSembakoAssistant
                 groqService);
 
             MainContent.Content = aiChatView;
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            try
+            {
+                _botController?.StopAsync().GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // Jangan blokir penutupan window hanya karena shutdown runtime gagal.
+            }
+
+            base.OnClosing(e);
         }
     }
 }

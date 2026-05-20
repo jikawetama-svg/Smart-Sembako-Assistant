@@ -6,6 +6,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <AssemblyName>SmartSembakoAssistant</AssemblyName>
+    <Version>5.0.0</Version>
+    <AssemblyVersion>5.0.0.0</AssemblyVersion>
+    <FileVersion>5.0.0.0</FileVersion>
+    <Product>Smart Sembako Assistant</Product>
+    <Company>SA TECH.Inc</Company>
+    <Copyright>Copyright (c) 2026 SA TECH.Inc</Copyright>
+    <Description>Asisten manajemen toko sembako berbasis AI dengan OCR faktur otomatis.</Description>
+    <ApplicationIcon>Resources\logo.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +32,8 @@
     
     <!-- OCR -->
     <PackageReference Include="Tesseract" Version="5.2.0" />
+    <PackageReference Include="SkiaSharp" Version="2.88.8" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.8" />
     
     <!-- Security (DPAPI) -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
@@ -35,6 +46,18 @@
     
     <!-- Logging -->
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\logo.png" />
+    <None Update="config.template.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Update="Integrations\BaileysSidecar\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

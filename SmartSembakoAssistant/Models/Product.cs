@@ -21,6 +21,7 @@ namespace SmartSembakoAssistant.Models
         public DateTime? ExpiryDate { get; set; } // Mapped dari DocumentItemExpirationDate.ExpirationDate
         public string? BatchNumber { get; set; } // Mapped dari DocumentItemExpirationDate.BatchNumber
         public bool IsActive { get; set; } = true; // Mapped dari Product.IsEnabled
+        public decimal SoldThisMonth { get; set; }
         
         // Computed property untuk status stok
         public string StockStatus
@@ -60,8 +61,38 @@ namespace SmartSembakoAssistant.Models
         public string? Id { get; set; }
         public string? Username { get; set; }
         public string? FullName { get; set; }
+        public string? Name { get; set; }
         public string? Role { get; set; } // Owner, Kasir, Admin
+        public string? TelegramId { get; set; }
+        public string? WhatsappNumber { get; set; }
+        public long RoleId { get; set; }
         public bool IsActive { get; set; } = true;
+        public DateTime CreatedAt { get; set; }
+    }
+
+    public class DocumentInfo
+    {
+        public string? Id { get; set; }
+        public string? Number { get; set; }
+        public int DocumentTypeId { get; set; }
+        public string? DocumentTypeLabel { get; set; }
+        public DateTime? Date { get; set; }
+        public string? UserId { get; set; }
+        public string? UserName { get; set; }
+        public string? CustomerId { get; set; }
+        public string? CustomerName { get; set; }
+        public decimal Total { get; set; }
+    }
+
+    public class DocumentItemInfo
+    {
+        public string? ProductId { get; set; }
+        public string? ProductName { get; set; }
+        public string? Unit { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal Price { get; set; }
+        public decimal ProductCost { get; set; }
+        public decimal Total { get; set; }
     }
 
     public class StockMovement
@@ -105,12 +136,44 @@ namespace SmartSembakoAssistant.Models
     public class CustomerTransaction
     {
         public string? TransactionId { get; set; }
+        public string? DocumentNumber { get; set; }
         public DateTime? Date { get; set; }
         public decimal Total { get; set; }
         public string? ProductName { get; set; }
         public decimal Quantity { get; set; }
         public decimal Price { get; set; }
         public decimal ItemTotal { get; set; }
+    }
+
+    public class CustomerReceivable
+    {
+        public string? CustomerId { get; set; }
+        public string CustomerName { get; set; } = "";
+        public string? Phone { get; set; }
+        public int InvoiceCount { get; set; }
+        public decimal TotalOwed { get; set; }
+        public DateTime? OldestDueDate { get; set; }
+        public DateTime? LastTransactionDate { get; set; }
+    }
+
+    public class ReceivableInvoice
+    {
+        public string? DocumentNumber { get; set; }
+        public DateTime? Date { get; set; }
+        public DateTime? DueDate { get; set; }
+        public decimal InvoiceTotal { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal OutstandingBalance { get; set; }
+    }
+
+    public class CustomerDocumentSummary
+    {
+        public string? DocumentId { get; set; }
+        public string? DocumentNumber { get; set; }
+        public DateTime? Date { get; set; }
+        public decimal Total { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal OutstandingBalance { get; set; }
     }
 
     /// <summary>
@@ -122,8 +185,57 @@ namespace SmartSembakoAssistant.Models
         public int DocumentId { get; set; }
         public string? DocumentNumber { get; set; }
         public decimal Total { get; set; }
+        public decimal OldStock { get; set; } // Stok sebelum operasi, dari transaksi yang sama
         public decimal NewStock { get; set; } // Stok baru setelah operasi
         public string? Error { get; set; }
+    }
+
+    public class BulkDocumentItemInput
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public decimal Quantity { get; set; }
+        public decimal Price { get; set; }
+        public decimal? CurrentStock { get; set; }
+        public string? Unit { get; set; }
+    }
+
+    public class BulkDocumentItemResult
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public decimal OldStock { get; set; }
+        public decimal NewStock { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal Price { get; set; }
+        public decimal Adjustment { get; set; }
+        public string? Unit { get; set; }
+        public decimal Total { get; set; }
+    }
+
+    public class BulkDocumentResult
+    {
+        public bool Success { get; set; }
+        public int DocumentId { get; set; }
+        public string? DocumentNumber { get; set; }
+        public decimal Total { get; set; }
+        public List<BulkDocumentItemResult> Items { get; set; } = new();
+        public string? Error { get; set; }
+    }
+
+    public class ProductMatchCandidate
+    {
+        public Product Product { get; set; } = new();
+        public int Score { get; set; }
+        public bool IsExactMatch { get; set; }
+    }
+
+    public class ProductMatchResult
+    {
+        public Product? BestMatch { get; set; }
+        public List<ProductMatchCandidate> Candidates { get; set; } = new();
+        public bool IsAmbiguous { get; set; }
+        public string? Reason { get; set; }
     }
 
     /// <summary>
@@ -136,6 +248,16 @@ namespace SmartSembakoAssistant.Models
         public decimal Quantity { get; set; }
         public decimal Price { get; set; }
         public decimal Total { get; set; }
+        public decimal UnitCost
+        {
+            get => Price;
+            set => Price = value;
+        }
+        public decimal TotalCost
+        {
+            get => Total;
+            set => Total = value;
+        }
     }
 
     /// <summary>
@@ -146,6 +268,19 @@ namespace SmartSembakoAssistant.Models
         public string? DocumentNumber { get; set; }
         public DateTime? Date { get; set; }
         public decimal QuantityChange { get; set; }
+        public decimal Adjustment
+        {
+            get => QuantityChange;
+            set => QuantityChange = value;
+        }
+        public DateTime Timestamp
+        {
+            get => Date ?? DateTime.Now;
+            set => Date = value;
+        }
+        public decimal OldStock { get; set; }
+        public decimal NewStock { get; set; }
+        public string Reason { get; set; } = "Inventory Count";
     }
 
     /// <summary>
@@ -160,6 +295,14 @@ namespace SmartSembakoAssistant.Models
         public decimal SellingPrice { get; set; }
         public decimal CostPrice { get; set; }
         public decimal RecommendedQty { get; set; }
+        public decimal AverageSales { get; set; }
+        public decimal AverageDailySales7Days { get; set; }
+        public decimal AverageDailySales30Days { get; set; }
+        public decimal SalesLast7Days { get; set; }
+        public decimal SalesLast30Days { get; set; }
+        public int DaysSafe { get; set; }
+        public string Priority { get; set; } = "LOW";
+        public bool RequiresManualReview { get; set; }
     }
 
     /// <summary>
@@ -168,9 +311,26 @@ namespace SmartSembakoAssistant.Models
     public class ProductSalesData
     {
         public int Rank { get; set; }
+        public string? ProductId { get; set; }
         public string? ProductName { get; set; }
+        public string? Unit { get; set; }
         public decimal QuantitySold { get; set; }
         public decimal Revenue { get; set; }
+        public decimal Profit { get; set; }
+        public DateTime? LastSaleDate { get; set; }
+    }
+
+    public class ProductSalesTransaction
+    {
+        public string? DocumentId { get; set; }
+        public string? DocumentNumber { get; set; }
+        public DateTime? Date { get; set; }
+        public string? CustomerName { get; set; }
+        public string? UserName { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal Price { get; set; }
+        public decimal ProductCost { get; set; }
+        public decimal Total { get; set; }
         public decimal Profit { get; set; }
     }
 
@@ -201,6 +361,29 @@ namespace SmartSembakoAssistant.Models
         /// Calculated bar width in pixels (set in code-behind based on available width)
         /// </summary>
         public double BarWidth { get; set; }
+    }
+
+    public class ZeroCostProductInsight
+    {
+        public string? ProductId { get; set; }
+        public string? ProductName { get; set; }
+        public decimal SellingPrice { get; set; }
+        public string? Unit { get; set; }
+        public string? Category { get; set; }
+        public decimal QuantitySold30Days { get; set; }
+        public decimal Revenue30Days { get; set; }
+        public DateTime? LastSaleDate { get; set; }
+    }
+
+    public class ZeroCostExportRow
+    {
+        public string? ProductName { get; set; }
+        public decimal SellingPrice { get; set; }
+        public string? Unit { get; set; }
+        public string? Category { get; set; }
+        public decimal QuantitySold { get; set; }
+        public decimal Revenue { get; set; }
+        public DateTime? LastSaleDate { get; set; }
     }
 
     /// <summary>

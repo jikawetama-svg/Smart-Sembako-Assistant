@@ -1,0 +1,445 @@
+# 🚀 Implementation Plan: Sales Export, Customer Lists, Pelanggan Loyal & Stok
+
+## Latar Belakang
+
+Berdasarkan percakapan user + `rancangan format terbaru` + `implementation_plan 1`, semua keputusan desain sudah disepakati:
+
+| Topik | Keputusan |
+|-------|-----------|
+| Format export | **CSV** (tanpa NuGet package) |
+| Limit list pelanggan tanpa argumen | **Top 15** (jika total ≤ 20 → tampilkan semua) |
+| Definisi Pelanggan Loyal | **Kombinasi**: ≥ 8 transaksi **ATAU** total belanja ≥ Rp 5.000.000 |
+| Navigasi list panjang | **Hybrid**: tampil ringkasan dulu → tawarkan EKSPOR (file) atau LANJUT (pagination) |
+| AI untuk data besar | **Tidak** — data besar pakai Deterministic Command + Export |
+| Template response | **Variasi B** (Ringkasan Dulu + Offer File) sebagai default |
+| Sales intent routing | **A + C combo**: ringkasan + offer export |
+
+---
+
+## 📌 Temuan Penting dari Audit Kode
+
+Setelah audit langsung ke kode yang ada, ditemukan:
+
+### Sudah Ada (tidak perlu dibuat ulang):
+- ✅ `PosDbService.GetCustomersAsync()` — sudah ada dengan parameter query + limit
+- ✅ `PosDbService.GetTopCustomersAsync()` — sudah ada (limit = 10 teratas berdasarkan spending)
+- ✅ `PosDbService.GetTotalCustomersAsync()` — **sudah ada!** (line 1394)
+- ✅ `PosDbService.GetCustomerTransactionsAsync()` — **sudah ada!** (line 1421)
+- ✅ `PosDbService.GetSuppliersAsync()` — sudah ada
+- ✅ `PosDbService.GetSalesTransactionsAsync(startDate, endDate)` — sudah ada (line 3434)
+- ✅ `PosDbService.GetSalesRevenueAsync(startDate, endDate)` — sudah ada (line 3494)
+- ✅ `PosDbService.GetSalesProfitAsync(startDate, endDate)` — sudah ada (line 3539)
+- ✅ `PosDbService.GetSalesTransactionCountAsync()` — sudah ada (line 3588)
+- ✅ `PosDbService.GetSalesLineItemsAsync(startDate, endDate)` — sudah ada (line 3634), cocok untuk export CSV
+- ✅ `PosDbService.GetDailySalesAsync(startDate, endDate)` — sudah ada (line 3802)
+- ✅ `PosDbService.GetCustomerPurchasesAsync(startDate, endDate)` — sudah ada (line 3865)
+- ✅ `PosDbService.GetAllProductsAsync()` — sudah ada (line 265)
+- ✅ `DetectDeterministicIntent()` — sudah ada (line 1932)
+- ✅ `HandleTopCustomersIntentAsync()` — sudah ada (line 2004)
+- ✅ `BuildRealStoreDataAsync()` — sudah ada (line 2027)
+- ✅ `TelegramBotService.SendMessageAsync()` — sudah ada
+
+### Yang Belum Ada (perlu dibuat/dimodifikasi):
+- ❌ `TelegramBotService.SendDocumentAsync()` — belum ada, hanya teks
+- ❌ `Helpers/CsvExportHelper.cs` — belum ada
+- ❌ `HandleExportCustomersAsync()` — belum ada
+- ❌ `HandleExportSuppliersAsync()` — belum ada
+- ❌ `HandleExportSalesAsync(period)` — belum ada
+- ❌ `HandleSalesSummaryAsync(period)` — belum ada (untuk "ringkasan penjualan hari ini/minggu ini/bulan ini")
+- ❌ Intent: `export_customers`, `export_suppliers`, `export_sales`, `sales_summary`, `sales_today` — belum ada
+- ❌ Pending state untuk "user konfirmasi ekspor" — belum ada (perlu state machine sederhana)
+- ❌ `PosDbService.GetProductCountAsync()` / `GetSupplierCountAsync()` — belum ada (untuk AI context)
+- ❌ `PosDbService.GetAllCustomersAsync()` (tanpa limit) — belum ada, yang ada pakai limit
+
+> [!NOTE]
+> `GetTotalCustomersAsync()` sudah ada di PosDbService (line 1394). Ini berarti plan sebelumnya sudah setengah terlaksana di database layer!
+
+---
+
+## 🏗️ Proposed Changes
+
+### Component 1: Helpers/ — New CsvExportHelper
+
+---
+
+#### [NEW] `Helpers/CsvExportHelper.cs`
+
+Static helper untuk generate semua jenis CSV. Tidak butuh NuGet package.
+
+**Methods yang akan dibuat:**
+```csharp
+// Export semua pelanggan
+public static string GenerateCustomerCsv(IEnumerable<CustomerInfo> customers)
+// Kolom: No, Nama, HP, Email, Total Transaksi, Total Belanja
+
+// Export semua supplier
+public static string GenerateSupplierCsv(IEnumerable<CustomerInfo> suppliers)
+// Kolom: No, Nama, HP, Email
+
+// Export penjualan per periode
+public static string GenerateSalesCsv(IEnumerable<SalesLineItem> items, string periodLabel)
+// Kolom: No, Tanggal, No Dokumen, Produk, Qty, Satuan, Harga, Total, Pelanggan, Kasir
+
+// Export stok barang lengkap
+public static string GenerateStockCsv(IEnumerable<Product> products)
+// Kolom: No, Kode, Nama, Stok, Stok Min, Harga Beli, Harga Jual, Nilai Stok, Kategori
+```
+
+**Teknik generate CSV:**
+- Gunakan `StringBuilder` built-in, tidak perlu library
+- Handle karakter koma/newline dalam field dengan pembungkus `"quotes"`
+- Tambahkan BOM untuk kompatibilitas Excel Indonesia (`\uFEFF` di awal)
+
+---
+
+### Component 2: Services/TelegramBotService.cs — Add SendDocumentAsync
+
+---
+
+#### [MODIFY] `Services/TelegramBotService.cs`
+
+Tambahkan method baru untuk kirim file ke chat Telegram:
+
+```csharp
+public async Task SendDocumentAsync(long chatId, string filePath, string caption = "")
+{
+    using var stream = File.OpenRead(filePath);
+    await _botClient.SendDocumentAsync(
+        chatId,
+        new InputFileStream(stream, Path.GetFileName(filePath)),
+        caption: caption
+    );
+}
+```
+
+> [!IMPORTANT]
+> Telegram bot bisa kirim file hingga 50MB. File CSV kita jauh di bawah itu.
+
+---
+
+### Component 3: Services/AutomationEngine.cs — Core Changes
+
+---
+
+#### [MODIFY] `DetectDeterministicIntent()` — Tambah 5 intent baru
+
+**Intent yang ditambahkan:**
+
+| Intent Kind | Trigger Keyword | OwnerOnly |
+|-------------|----------------|-----------|
+| `export_customers` | "ekspor pelanggan", "export pelanggan", "kirim file pelanggan", "EKSPOR PELANGGAN" | ✅ |
+| `export_suppliers` | "ekspor supplier", "export supplier", "EKSPOR SUPPLIER" | ✅ |
+| `export_sales` | "ekspor penjualan", "export penjualan", "kirim file penjualan", "EKSPOR PENJUALAN" + period | ✅ |
+| `export_stock` | "ekspor stok", "export stok", "kirim file stok", "EKSPOR STOK" | ✅ |
+| `sales_summary` | "penjualan hari ini", "laporan penjualan", "omzet hari ini", "omzet minggu ini", "omzet bulan ini" | ✅ |
+
+**Tambahan: keyword konfirmasi**
+
+| Keyword | Action |
+|---------|--------|
+| "YA" / "ya" / "yes" | Konfirmasi pending export (state machine) |
+| "LANJUT PELANGGAN" | Pagination pelanggan halaman berikutnya |
+| "LANJUT SUPPLIER" | Pagination supplier halaman berikutnya |
+
+**Logic sales_summary** akan membaca periode dari teks:
+- "hari ini" → today
+- "kemarin" → yesterday  
+- "minggu ini" → start of current week → today
+- "bulan ini" → start of current month → today
+
+---
+
+#### [MODIFY] `TryHandleDeterministicIntentAsync()` — Tambah routing ke handler baru
+
+```csharp
+"export_customers" => await HandleExportCustomersAsync(),
+"export_suppliers" => await HandleExportSuppliersAsync(),
+"export_sales"     => await HandleExportSalesAsync(intent.Argument ?? "today"),
+"export_stock"     => await HandleExportStockAsync(),
+"sales_summary"    => await HandleSalesSummaryAsync(intent.Argument ?? "today"),
+"confirm_export"   => await HandleConfirmExportAsync(message),
+```
+
+---
+
+#### [NEW] `HandleSalesSummaryAsync(string period)` — Ringkasan penjualan per periode
+
+Tampilkan ringkasan (Variasi B dari percakapan user):
+
+```
+✅ Saya siapkan data penjualan hari ini.
+
+📊 Ringkasan Penjualan Hari Ini (03 Mei 2026)
+• Total Transaksi     : 47
+• Total Omzet         : Rp 12.450.000
+• Rata-rata           : Rp 265.000 per transaksi
+• Produk Terlaris     : Kapal Api Mix (12 pcs)
+
+Data detail lengkapnya cukup banyak. Mau saya kirimkan file CSV?
+Balas YA atau EKSPOR PENJUALAN HARI INI untuk melanjutkan.
+```
+
+**Period parameter:** `"today"`, `"yesterday"`, `"week"`, `"month"`
+
+Setelah tampil ringkasan → simpan `pending export type` ke state (key: `"pending_export"`, value: `"sales:today"`)
+
+---
+
+#### [NEW] `HandleExportCustomersAsync()` — Generate & kirim CSV pelanggan
+
+Flow:
+1. `GetCustomersAsync(null, int.MaxValue)` → semua pelanggan (perlu tambah overload tanpa limit)
+2. `CsvExportHelper.GenerateCustomerCsv(customers)` → string CSV
+3. Simpan ke temp file: `Path.GetTempPath() + $"pelanggan_{DateTime.Now:yyyyMMdd}.csv"`
+4. `TelegramBotService.SendDocumentAsync(chatId, filePath, caption)` → kirim
+5. Hapus temp file setelah kirim
+6. Return pesan konfirmasi: `"✅ File CSV pelanggan telah dikirim! ({count} pelanggan)"`
+
+---
+
+#### [NEW] `HandleExportSuppliersAsync()` — Generate & kirim CSV supplier
+
+Identik dengan pelanggan, tapi pakai `GetSuppliersAsync(null, int.MaxValue)`.
+
+---
+
+#### [NEW] `HandleExportSalesAsync(string period)` — Generate & kirim CSV penjualan
+
+Flow:
+1. Tentukan `startDate` dan `endDate` berdasarkan `period`
+2. `GetSalesLineItemsAsync(startDate, endDate)` → list semua item penjualan
+3. `CsvExportHelper.GenerateSalesCsv(items, periodLabel)` → string CSV
+4. Simpan ke temp file → kirim → hapus
+5. Return caption + ringkasan singkat
+
+---
+
+#### [NEW] `HandleExportStockAsync()` — Generate & kirim CSV stok lengkap
+
+Flow:
+1. `GetAllProductsAsync()` → semua produk
+2. `CsvExportHelper.GenerateStockCsv(products)` → string CSV
+3. Kirim file
+4. Return konfirmasi
+
+---
+
+#### [MODIFY] `HandleCustomersAsync(string args)` — Upgrade ke format baru
+
+**Sebelum:** Top 10, tanpa count, tanpa opsi ekspor
+
+**Sesudah:**
+- Jika tanpa argumen:
+  1. Ambil total count (`GetTotalCustomersAsync()`)
+  2. Ambil top 15 (`GetCustomersAsync(null, 15)`)
+  3. Jika total ≤ 20 → tampilkan semua
+  4. Tambahkan footer:
+  ```
+  👥 PELANGGAN (47 total)
+  Menampilkan 15 teratas berdasarkan jumlah transaksi.
+  
+  📄 Ketik EKSPOR PELANGGAN untuk file CSV lengkap
+  📋 Atau ketik LANJUT PELANGGAN untuk halaman berikutnya
+  ```
+- Jika ada argumen: tampilkan detail pelanggan (sama seperti sekarang, tidak berubah)
+
+---
+
+#### [MODIFY] `HandleSuppliersAsync(string args)` — Upgrade ke format baru
+
+Sama dengan pelanggan, tapi:
+- Ambil total supplier count (butuh method baru `GetTotalSuppliersAsync()`)
+- Jika total ≤ 15 → tampilkan semua (supplier biasanya sedikit)
+- Footer: `📄 Ketik EKSPOR SUPPLIER untuk file CSV`
+
+---
+
+#### [MODIFY] `HandleTopCustomersIntentAsync()` — Upgrade format + definisi loyal
+
+**Sebelum:** Top 10 berdasarkan spending saja
+
+**Sesudah:**
+- Definisi loyal: ≥ 8 transaksi **ATAU** total belanja ≥ Rp 5.000.000
+- Tampilkan 2 sub-list:
+  - `/pelanggan loyal` → ranking berdasarkan total belanja
+  - Catatan: "Ketik `/pelanggan sering` untuk ranking berdasarkan jumlah transaksi"
+- Format ranking dengan emoji 🥇🥈🥉 + detail transaksi
+
+---
+
+#### [MODIFY] `BuildRealStoreDataAsync()` — Tambah count ke AI context
+
+Tambahkan 3 baris ke context yang dikirim ke Groq AI:
+```csharp
+int totalCustomers = await _posDbService.GetTotalCustomersAsync();
+// GetSupplierCountAsync() dan GetProductCountAsync() perlu dibuat
+sb.AppendLine($"Total pelanggan terdaftar: {totalCustomers}");
+sb.AppendLine($"Total supplier: {totalSuppliers}");
+sb.AppendLine($"Total produk: {totalProducts}");
+```
+
+---
+
+#### [MODIFY] `HandleNaturalLanguageAsync()` — Tambah identity guard
+
+Tambahkan sebelum panggil AI:
+```csharp
+if (IsIdentityQuestion(normalizedText))
+    return BuildBotIdentityResponse();
+```
+
+---
+
+#### [NEW] `IsIdentityQuestion(string text)` + `BuildBotIdentityResponse()`
+
+```csharp
+private static bool IsIdentityQuestion(string text) =>
+    text.Contains("namamu") || text.Contains("siapa kamu") ||
+    text.Contains("kamu apa") || text.Contains("apa itu ssa") ||
+    text.Contains("nama bot") || text.Contains("bot apa");
+
+private static string BuildBotIdentityResponse() =>
+    $"{IconRobot} Saya Smart Sembako Assistant (SSA)!\n\n" +
+    "Saya membantu pemilik toko sembako untuk:\n" +
+    "• Cek stok barang (/stok)\n• Laporan penjualan (/laporan)\n" +
+    "• Data pelanggan (/pelanggan)\n• Dan banyak lagi!\n\n" +
+    "Ketik /help untuk daftar lengkap fitur.";
+```
+
+---
+
+#### [MODIFY] Fix minor dari `rancangan format terbaru`
+
+**Fix 1:** `/riwayat_*` tanpa argumen → pesan error yang ramah
+```csharp
+if (string.IsNullOrWhiteSpace(args))
+    return "❌ Format salah.\nGunakan: /riwayat_restock <nama produk>\nContoh: /riwayat_restock kapal api mix";
+```
+
+**Fix 2:** `/user` — hapus duplikasi label level
+```csharp
+// Sebelum: $"  {fullName} ({FormatOptional(user.Role)} Lv.{user.RoleId}) {activeLabel}"
+// Sesudah: $"  {fullName} (Lv.{user.RoleId}) {activeLabel}"
+```
+
+---
+
+### Component 4: Services/GroqService.cs — Perkaya System Prompt
+
+---
+
+#### [MODIFY] `GenerateNaturalResponseAsync()` — Update system prompt
+
+Tambahkan rule eksplisit ke system prompt:
+
+```
+IDENTITAS BOT:
+- Nama resmi: Smart Sembako Assistant (SSA)
+- Jika ditanya siapa kamu/nama bot → jawab dengan nama resmi
+
+ANTI CONTEXT LEAK:
+- Setiap pertanyaan adalah INDEPENDEN
+- JANGAN gunakan data dari pesan sebelumnya kecuali user menyebutkan eksplisit
+- Jangan karang data yang tidak ada di context
+
+ROUTING DATA BESAR:
+- Jika user minta "data penjualan lengkap/detail/semua transaksi" 
+  → Sarankan: "Gunakan EKSPOR PENJUALAN untuk mendapat file CSV"
+- Jangan tampilkan daftar panjang di chat, arahkan ke command
+
+JAWAB DENGAN DATA YANG ADA:
+- "berapa total pelanggan?" → gunakan angka "Total pelanggan terdaftar: X" dari context
+- "berapa total supplier?" → gunakan angka dari context
+- Jika data tidak ada di context → jawab: "Data tidak tersedia. Gunakan /laporan atau /pelanggan"
+```
+
+---
+
+### Component 5: Services/PosDbService.cs — Method Baru
+
+---
+
+#### [NEW] `GetProductCountAsync()` — Count total produk
+
+```csharp
+public async Task<int> GetProductCountAsync()
+// SELECT COUNT(*) FROM Product WHERE IsActive = 1
+```
+
+#### [NEW] `GetTotalSuppliersAsync()` — Count total supplier
+
+```csharp
+public async Task<int> GetTotalSuppliersAsync()
+// SELECT COUNT(*) FROM Contact WHERE IsSupplier = 1 AND IsActive = 1
+```
+
+#### [MODIFY] `GetCustomersAsync()` — Tambah overload tanpa limit
+
+Tambahkan parameter optional `int? limit = null`:
+```csharp
+public async Task<List<CustomerInfo>> GetCustomersAsync(string? query, int? limit = null, bool onlyCustomers = true)
+```
+Atau buat overload `GetAllCustomersAsync()` tanpa LIMIT clause.
+
+---
+
+## 🗃️ Pending State Machine (Untuk Konfirmasi Export)
+
+Untuk mendukung flow "user minta ringkasan → bot tanya → user balas YA → bot kirim file", perlu state machine sederhana.
+
+**Implementasi:** Gunakan `Dictionary<string, string> _pendingExportBySender` di AutomationEngine (in-memory, tidak perlu DB).
+
+**Flow:**
+1. User: "penjualan hari ini" → `HandleSalesSummaryAsync("today")` → tampil ringkasan → simpan `_pendingExportBySender[senderId] = "sales:today"`
+2. User: "YA" → cek `_pendingExportBySender` → ada pending → panggil `HandleExportSalesAsync("today")` → clear pending
+3. Timeout: pending di-clear setelah 5 menit (opsional, bisa skip dulu)
+
+---
+
+## 📁 Ringkasan File yang Akan Diubah
+
+| File | Action | Perubahan |
+|------|--------|-----------|
+| `Helpers/CsvExportHelper.cs` | **[NEW]** | Generate CSV untuk pelanggan, supplier, penjualan, stok |
+| `Services/TelegramBotService.cs` | **[MODIFY]** | Tambah `SendDocumentAsync()` |
+| `Services/AutomationEngine.cs` | **[MODIFY]** | 5 intent baru, 5 handler baru, 3 handler upgrade, 2 fix minor, state machine |
+| `Services/GroqService.cs` | **[MODIFY]** | Update system prompt (identitas + anti-leak + routing) |
+| `Services/PosDbService.cs` | **[MODIFY]** | `GetProductCountAsync()`, `GetTotalSuppliersAsync()`, upgrade `GetCustomersAsync()` |
+
+---
+
+## ✅ Verification Plan
+
+### Test Manual via Telegram (setelah implementasi):
+
+| # | Input | Expected Output |
+|---|-------|----------------|
+| 1 | `/pelanggan` (tanpa argumen) | Tampil top 15 + total count + opsi EKSPOR/LANJUT |
+| 2 | `EKSPOR PELANGGAN` | Bot kirim file CSV berisi semua pelanggan |
+| 3 | `penjualan hari ini` | Tampil ringkasan + tawaran ekspor |
+| 4 | `YA` (setelah #3) | Bot kirim file CSV penjualan hari ini |
+| 5 | `EKSPOR PENJUALAN MINGGU INI` | Bot langsung kirim file CSV penjualan 7 hari |
+| 6 | `namamu siapa?` | "Saya Smart Sembako Assistant (SSA)!" |
+| 7 | `berapa total pelanggan?` | Angka count yang benar dari DB |
+| 8 | `/riwayat_restock` (tanpa argumen) | Pesan error ramah + contoh format |
+| 9 | `/user` | Format tanpa duplikasi "Level 12 Lv.12" |
+| 10 | `omzet minggu ini` | Ringkasan + tawaran export periode minggu ini |
+| 11 | `laporan stok barang` | Ringkasan stok kritis + tawaran EKSPOR STOK |
+
+### Build Verification:
+```bash
+dotnet build SmartSembakoAssistant/SmartSembakoAssistant.csproj
+```
+
+---
+
+## ❓ Open Questions (Opsional — Bisa Langsung Eksekusi)
+
+> [!NOTE]
+> Semua keputusan besar sudah disepakati di percakapan. Yang di bawah ini hanya detail implementasi minor.
+
+1. **Pagination `/pelanggan`** — Saat user ketik `LANJUT PELANGGAN`, tampilkan halaman 2 (item 16-30). Perlu state untuk track halaman (`_paginationStateBySender`). Mau diimplementasikan sekarang atau skip dulu dan hanya ada opsi ekspor?
+
+2. **WhatsApp** — Apakah `HandleExportCustomersAsync()` juga perlu kirim file via WhatsApp (Baileys)? Atau untuk sekarang hanya Telegram saja yang support file?
+
+3. **Supplier export** — `GetSuppliersAsync()` menggunakan model `CustomerInfo` yang sama dengan pelanggan. Kolom CSV supplier mau disamakan atau ada kolom khusus supplier?

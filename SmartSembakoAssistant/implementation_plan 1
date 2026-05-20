@@ -1,0 +1,314 @@
+# 🤖 Rencana Implementasi: AI Response Quality + Excel Export + Data Lengkap
+
+## Ringkasan Masalah
+
+Berdasarkan evaluasi di `rancangan format terbaru` dan percakapan user, ada **3 masalah utama**:
+
+1. **AI ngawur** — jawaban tidak relevan dengan pertanyaan, context "bocor" dari aksi sebelumnya
+2. **Respon terpotong** — data panjang (pelanggan, supplier) terpotong oleh limit 4096 karakter WA/Telegram
+3. **Data tidak lengkap** — `total_pelanggan`, `total_supplier`, dll tidak tersedia di context AI, sehingga AI mengarang
+
+---
+
+## 📋 User Review Required
+
+> [!IMPORTANT]
+> **Fitur Export Excel** memerlukan package NuGet `ClosedXML` atau `EPPlus`. Kamu perlu approve instalasi package ini.
+> Alternatif: bisa pakai format CSV yang tidak butuh package eksternal.
+> **Pilih:** Excel (ClosedXML) atau CSV?
+
+> [!IMPORTANT]
+> **Fitur SendDocumentAsync Telegram** — bot akan mengirim file `.xlsx`/`.csv` langsung ke Telegram chat.
+> Pastikan kamu nyaman bot bisa kirim file (bukan hanya teks).
+
+> [!NOTE]
+> Rencana ini mempertahankan semua command yang sudah jalan (`/stok`, `/laporan`, dll) — tidak ada regression.
+
+---
+
+## 🔴 Prioritas 1: AI Anti-Ngawur (System Prompt + Intent Guard)
+
+### Root Cause yang Teridentifikasi:
+
+| Bug | Lokasi | Penyebab |
+|-----|--------|---------|
+| Jawaban bocor dari aksi sebelumnya | `BuildRealStoreDataAsync()` | Produk terakhir diproses "merembes" ke context AI |
+| "Berapa total pelanggan?" → tidak tahu | `BuildRealStoreDataAsync()` | Tidak ada `total_pelanggan` di data context |
+| "Namamu siapa?" → salah | `GroqService.GenerateNaturalResponseAsync()` | System prompt tidak ada rule identitas bot |
+| "Selain itu ada lagi?" → tidak scan lain | `DetectDeterministicIntent()` | Tidak ada intent "follow-up" |
+| "Cek transaksi hj yuyun" → stok | `BuildRealStoreDataAsync()` | Tidak ada intent "cari transaksi pelanggan" |
+
+### Perubahan yang Direncanakan:
+
+#### [MODIFY] AutomationEngine.cs — `BuildRealStoreDataAsync()`
+
+Tambahkan ke context AI:
+- `total_pelanggan` (COUNT dari Customer)
+- `total_supplier` (COUNT dari Supplier/Contact)
+- `total_produk` (COUNT dari Product)
+- Intent guard: **jika pertanyaan tidak berhubungan dengan data toko sama sekali, JANGAN load data produk terakhir**
+
+```csharp
+// Tambahkan setelah BuildRealStoreDataAsync:
+int totalCustomers = await _posDbService.GetCustomerCountAsync();
+int totalSuppliers = await _posDbService.GetSupplierCountAsync();
+int totalProducts = await _posDbService.GetProductCountAsync();
+sb.AppendLine($"Total pelanggan: {totalCustomers}");
+sb.AppendLine($"Total supplier: {totalSuppliers}");
+sb.AppendLine($"Total produk: {totalProducts}");
+```
+
+#### [MODIFY] GroqService.cs — `GenerateNaturalResponseAsync()` system prompt
+
+Tambahkan rule eksplisit:
+```
+IDENTITAS BOT:
+- Nama: Smart Sembako Assistant (SSA)
+- Jika ditanya "siapa kamu", "namamu apa", jawab: "Saya Smart Sembako Assistant..."
+- Jangan pernah bocorkan data dari aksi/pesan SEBELUMNYA ke jawaban pertanyaan BARU
+
+ANTI-CONTEXT-LEAK:
+- Setiap pertanyaan adalah independen. JANGAN gunakan data produk terakhir yang baru diproses
+  kecuali user secara eksplisit menyebutkan nama produk itu di pertanyaan saat ini.
+
+INTENT ROUTING:
+- "cek transaksi [nama]" → gunakan data pelanggan di context, arahkan ke /dokumen
+- "berapa total pelanggan/supplier/produk" → gunakan angka total_ yang tersedia di data
+- "siapa pelanggan loyal" → data loyal_customers tersedia di context
+- Jika tidak ada data, jawab: "Data tidak tersedia. Gunakan /pelanggan atau /laporan"
+```
+
+#### [MODIFY] AutomationEngine.cs — `HandleNaturalLanguageAsync()`
+
+Tambahkan **identity intent guard** sebelum memanggil AI:
+```csharp
+// Jika pertanyaan tentang identitas bot → jawab langsung tanpa AI
+if (IsIdentityQuestion(message.Text))
+    return BuildBotIdentityResponse();
+```
+
+---
+
+## 🟡 Prioritas 2: Baca & Tampilkan Detail Pelanggan Loyal + Transaksinya
+
+### Kondisi Sekarang:
+`HandleTopCustomersIntentAsync()` hanya tampil format:
+```
+- Hj. Yuyun | 22 transaksi | Rp 8.203.150
+```
+
+### Yang Diinginkan:
+User bisa tanya "cek detail pelanggan hj yuyun" → tampil lengkap:
+- Nama, HP, email
+- Total transaksi & total belanja
+- Transaksi terakhir (3-5 transaksi)
+
+### Perubahan:
+
+#### [MODIFY] `DetectDeterministicIntent()` — tambah intent baru:
+```csharp
+// Intent: cek detail transaksi pelanggan
+if (normalized.Contains("transaksi") && ContainsCustomerKeyword(normalized))
+    return new DeterministicIntent { Kind = "customer_transactions", Argument = extractedName, OwnerOnly = true };
+```
+
+#### [NEW] `HandleCustomerTransactionsAsync(string name)` di AutomationEngine.cs:
+- Query: GET customer by name → GET transaksi by customer ID (dari PosDbService)
+- Tampil: nama, HP, total belanja, 5 transaksi terakhir
+
+#### [MODIFY] PosDbService.cs — tambah method:
+- `GetCustomerCountAsync()` → COUNT dari Customer
+- `GetSupplierCountAsync()` → COUNT dari Contact (supplier)
+- `GetProductCountAsync()` → COUNT dari Product
+- `GetCustomerTransactionsAsync(string customerId, int limit)` → transaksi per pelanggan
+
+---
+
+## 🟡 Prioritas 3: List Pelanggan & Supplier Lengkap (Dengan Pagination + Excel)
+
+### Kondisi Sekarang:
+`HandleCustomersAsync()` hanya tampil 10 pelanggan. Limit WA/Telegram = 4096 karakter.
+
+### Strategi Baru (sesuai rekomendasi user):
+
+```
+Strategi 1: Ringkasan + Tawarkan File (UTAMA)
+Strategi 2: Pagination (LANJUT 1, LANJUT 2)
+Strategi 3: Kirim file Excel/CSV via Telegram API
+```
+
+#### Flow baru `/pelanggan` tanpa argumen:
+```
+👥 PELANGGAN (47 total)
+
+1. Budi Santoso | 085xxx | 12 transaksi
+2. Hj. Yuyun   | 082xxx | 22 transaksi
+...dst (10 teratas)
+
+📄 Untuk daftar lengkap semua 47 pelanggan:
+Ketik EKSPOR PELANGGAN → Bot kirim file Excel
+Atau ketik LANJUT PELANGGAN → halaman berikutnya
+```
+
+#### Flow baru `/supplier` tanpa argumen:
+```
+🏭 SUPPLIER (8 total)
+
+1. PT Indofood | ...
+...
+(Jika ≤ 15 → tampilkan semua, tidak perlu export)
+```
+
+### Perubahan:
+
+#### [MODIFY] `HandleCustomersAsync()`:
+- Jika tanpa argumen: tampilkan ringkasan 10 teratas + total count + opsi ekspor
+- Jika argumen ada: tampilkan detail pelanggan yang cocok
+
+#### [MODIFY] `DetectDeterministicIntent()` — tambah intent ekspor:
+```csharp
+if (normalized.Contains("ekspor pelanggan") || normalized.Contains("export pelanggan"))
+    return new DeterministicIntent { Kind = "export_customers", OwnerOnly = true };
+```
+
+#### [NEW] `HandleExportCustomersAsync()` di AutomationEngine.cs:
+- Query semua pelanggan dari PosDb
+- Generate file CSV/Excel
+- Kirim via `SendDocumentAsync` (Telegram) atau simpan ke temp path
+
+#### [MODIFY] PosDbService.cs — `GetCustomersAsync()`:
+- Tambah overload tanpa limit untuk ekspor penuh
+
+---
+
+## 🟢 Prioritas 4: Fix Minor dari `rancangan format terbaru`
+
+### Fix 1: Error message `/riwayat_*` tanpa argumen
+
+#### [MODIFY] `HandleRestockHistoryAsync()` & `HandleInventoryHistoryAsync()`:
+```csharp
+if (string.IsNullOrWhiteSpace(args))
+    return "❌ Format salah.\nGunakan: /riwayat_restock <nama produk>\nContoh: /riwayat_restock kapal api mix";
+```
+
+### Fix 2: `/user` duplikasi label level
+
+#### [MODIFY] `HandleUsersAsync()` baris format user:
+```csharp
+// Sebelum: $"  {fullName} ({FormatOptional(user.Role)} Lv.{user.RoleId}) {activeLabel}"
+// Sesudah: $"  {fullName} ({FormatOptional(user.Role)}, Lv.{user.RoleId}) {activeLabel}"
+// Atau: $"  {fullName} (Lv.{user.RoleId}) {activeLabel}"
+```
+
+### Fix 3: `/pelanggan` & `/supplier` tanpa argumen — tambah total count
+
+#### [MODIFY] `HandleCustomersAsync()` & `HandleSuppliersAsync()`:
+```csharp
+int total = await _posDbService.GetCustomerCountAsync();
+sb.AppendLine($"{IconCustomer} PELANGGAN ({total} total)");
+```
+
+---
+
+## 📊 Arsitektur Export Excel/CSV
+
+```
+HandleExportCustomersAsync()
+  ↓
+PosDbService.GetAllCustomersAsync() → List<Customer>
+  ↓
+ExcelExportHelper.GenerateCustomerExcel(customers)
+  ↓
+TelegramBotService.SendDocumentAsync(chatId, filePath)
+  ↓
+File .xlsx dikirim ke Telegram chat (≤16MB)
+```
+
+### TelegramBotService — tambah method baru:
+```csharp
+public async Task SendDocumentAsync(long chatId, string filePath, string caption)
+{
+    using var stream = File.OpenRead(filePath);
+    await _botClient.SendDocumentAsync(chatId, new InputFileStream(stream, Path.GetFileName(filePath)), caption: caption);
+}
+```
+
+### [NEW] ExcelExportHelper.cs (static helper):
+Karena tidak mau pakai package berat, gunakan **CSV format** (built-in, tidak perlu NuGet):
+```csharp
+public static string GenerateCustomerCsv(List<Customer> customers)
+{
+    var sb = new StringBuilder();
+    sb.AppendLine("Nama,HP,Email,Total Transaksi,Total Belanja");
+    foreach (var c in customers)
+        sb.AppendLine($"{c.Name},{c.Phone},{c.Email},{c.PurchaseCount},{c.TotalSpent}");
+    return sb.ToString();
+}
+```
+
+> [!TIP]
+> CSV tidak butuh package eksternal, bisa langsung dibuka Excel. Kalau user mau format `.xlsx` dengan header berwarna dll, baru perlu ClosedXML.
+
+---
+
+## 📁 File yang Akan Diubah
+
+### Services/AutomationEngine.cs
+- `BuildRealStoreDataAsync()` — tambah total count
+- `HandleNaturalLanguageAsync()` — tambah identity guard
+- `HandleCustomersAsync()` — tambah total + pagination hint
+- `HandleSuppliersAsync()` — tambah total + pagination hint
+- `HandleUsersAsync()` — fix duplikasi label
+- `HandleRestockHistoryAsync()` — fix error message
+- `HandleInventoryHistoryAsync()` — fix error message
+- `DetectDeterministicIntent()` — tambah intent: `customer_transactions`, `export_customers`
+- `HandleTopCustomersIntentAsync()` — perkaya format output
+- [NEW] `HandleCustomerTransactionsAsync()` — detail transaksi pelanggan
+- [NEW] `HandleExportCustomersAsync()` — generate & kirim file
+- [NEW] `IsIdentityQuestion()` — guard pertanyaan identitas bot
+- [NEW] `BuildBotIdentityResponse()` — jawaban identitas bot
+
+### Services/GroqService.cs
+- `GenerateNaturalResponseAsync()` — perkaya system prompt anti-ngawur + identitas
+
+### Services/PosDbService.cs
+- [NEW] `GetCustomerCountAsync()` — COUNT pelanggan
+- [NEW] `GetSupplierCountAsync()` — COUNT supplier
+- [NEW] `GetProductCountAsync()` — COUNT produk
+- [NEW] `GetCustomerTransactionsAsync()` — transaksi per pelanggan
+- [MODIFY] `GetCustomersAsync()` — tambah overload tanpa limit
+
+### Services/TelegramBotService.cs
+- [NEW] `SendDocumentAsync()` — kirim file ke Telegram
+
+### Helpers/ [NEW] ExcelExportHelper.cs
+- `GenerateCustomerCsv()` — export CSV pelanggan
+- `GenerateSupplierCsv()` — export CSV supplier
+
+---
+
+## ✅ Verification Plan
+
+### Test Manual via Telegram:
+1. Kirim "namamu siapa?" → Harus jawab "Smart Sembako Assistant", bukan data omzet
+2. Kirim "total pelanggan berapa?" → Harus jawab angka count yang benar
+3. Kirim "/pelanggan" → Harus tampil total count + hint ekspor
+4. Kirim "/pelanggan hj yuyun" → Harus tampil detail pelanggan itu
+5. Kirim "cek transaksi hj yuyun" → Harus tampil riwayat transaksi pelanggan itu
+6. Kirim "/riwayat_restock" (tanpa argumen) → Harus tampil pesan error yang ramah
+7. Kirim "EKSPOR PELANGGAN" → Bot harus kirim file CSV
+8. Kirim dua pertanyaan berurutan dengan topik berbeda → Tidak boleh "bocor"
+
+### Test Build:
+```bash
+dotnet build
+```
+
+---
+
+## ❓ Open Questions untuk User
+
+1. **Format file export**: CSV (langsung jalan) vs Excel `.xlsx` (perlu ClosedXML NuGet)?
+2. **Limit tampilan list**: Saat `/pelanggan` tanpa argumen, tampilkan top 10 atau top 15?
+3. **Pelanggan loyal** — definisi loyal: berdasarkan jumlah transaksi atau total belanja?
+4. **Pagination**: Apakah perlu pagination via keyword "LANJUT PELANGGAN", atau cukup langsung kirim file?

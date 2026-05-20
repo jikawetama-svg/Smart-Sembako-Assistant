@@ -1,7 +1,73 @@
 {
     "project": "Smart Sembako Assistant",
+    "publisher": "SA TECH.Inc",
     "timezone": "UTC+07:00",
     "entries": [
+        {
+            "date": "2026-05-20",
+            "version": "5.0.1",
+            "title": "Baileys Pairing Hardening, Runtime Bundling, and Pairing Failure Analysis",
+            "summary": [
+                "BAILEYS PAIRING: Pairing flow diperketat agar kode berasal dari Baileys requestPairingCode, tidak digenerate manual/random oleh aplikasi.",
+                "PAIRING UX: Window pairing sekarang menampilkan kode format XXXX-XXXX, tile per karakter, dan validasi ketik ulang untuk mencegah salah baca 4/A, 1/I, dan 0/O.",
+                "LOGGED-OUT GUARD: Status 401/logged out sekarang memblokir generate kode baru sampai user menjalankan Reset Sesi Lokal.",
+                "SHORT COOLDOWN: Default retry pairing dipersingkat menjadi 30 detik, rate-limit lokal menjadi 2 menit, dan batas request dinaikkan menjadi 8 per jam.",
+                "PAIRING LOGGING: Log pairing sekarang mencatat raw code, formatted code, expiry, retryAfter, connection state, disconnect status, versi Baileys, dan browser identity.",
+                "BAILEYS UPGRADE: Sidecar Baileys dinaikkan dari 7.0.0-rc.9 ke 7.0.0-rc11 mengikuti versi terbaru npm saat pengecekan lokal.",
+                "SESSION RESET FIX: Reset session kini mengabaikan event socket lama agar tidak terjadi double boot dan 401 dari auth state stale setelah reset.",
+                "QR FALLBACK: Window pairing sekarang memiliki tombol Fallback QR yang reset session lokal dan menampilkan QR Baileys untuk discan dari Linked devices.",
+                "BAILEYS INBOUND FIX: Callback pesan masuk dari sidecar ke desktop sekarang memakai localhost agar cocok dengan HttpListener fallback dan tidak ditolak 400 Invalid Hostname.",
+                "BAILEYS LID FIX: Pengirim inbound Baileys v7 yang datang sebagai LID sekarang di-resolve ke nomor telepon owner/kasir sebelum otorisasi automation.",
+                "BAILEYS DIAGNOSTIC: Sidecar sekarang mencatat pesan own/fromMe yang diabaikan dan pesan inbound yang sukses diteruskan ke aplikasi desktop.",
+                "AI CHAT STARTUP GUARD: Event selection awal AI chat diberi null guard agar view tidak gagal load saat kontrol status belum terbentuk.",
+                "INSTALLER BUNDLING: Build release sekarang membundel node.exe, cloudflared.exe, dan BaileysSidecar lengkap dengan node_modules.",
+                "RUNTIME RESOLVER: Aplikasi disiapkan untuk mencari runtime bundled lebih dulu sebelum fallback ke PATH/system.",
+                "DIAGNOSTIC PLAN: Analisis screenshot 20 Mei 2026 menemukan risiko salah baca karakter pairing, terutama angka 4 vs huruf A, serta state 401 logged out setelah gagal pairing."
+            ],
+            "details": [
+                "Installer hasil build: artifacts/installer/Smart Sembako Assistant-Setup-v5.0.1.exe, sekitar 98 MB.",
+                "Payload release tervalidasi berisi runtimes/node/node.exe, runtimes/cloudflared/cloudflared.exe, Integrations/BaileysSidecar/index.js, package.json, package-lock.json, dan node_modules utama Baileys.",
+                "Verifikasi runtime: bundled node melaporkan v22.14.0 dan bundled cloudflared melaporkan 2026.5.0.",
+                "Verifikasi build: dotnet build sukses tanpa error; PowerShell build script parse OK; node --check untuk sidecar sukses.",
+                "Config default dan template diselaraskan ke PairingRetryCooldownSeconds=30, PairingRateLimitCooldownMinutes=2, MaxPairingRequestsPerHour=8.",
+                "Config runtime aktif di LocalAppData juga diselaraskan ke cooldown pendek agar test lokal berikutnya tidak memakai fallback lama.",
+                "Sidecar memakai browser identity Chrome/Windows/10 dan mengekspos versi Baileys di status untuk membantu membandingkan mekanisme phone-number pairing.",
+                "Fix lanjutan: pairing code yang expired sekarang menutup pairingInProgress dan memberi error eksplisit, bukan tetap terlihat menunggu.",
+                "Fix lanjutan: reset session memakai generation guard agar connection update dari socket lama tidak menimpa state session baru.",
+                "Fallback QR note: sidecar menambahkan endpoint /session/qr/start, dependency qrcode, status qrAvailable/qrDataUrl, dan UI WPF menampilkan QR sebagai image.",
+                "Inbound fix note: log 20 Mei 2026 23:38 menunjukkan sidecar sebelumnya mendapat HTTP 400 Bad Request - Invalid Hostname saat mengirim ke 127.0.0.1:8090, karena listener desktop fallback ke http://localhost:8090/.",
+                "Verifikasi inbound: POST manual ke /baileys/events/inbound berhasil 200, tercatat sebagai Baileys inbound dari owner, dan outbound /help terkirim via Baileys.",
+                "LID fix note: log 20 Mei 2026 23:50-23:52 memperlihatkan pengirim owner terbaca sebagai 93943987470394 sehingga dianggap Guest dan hanya menerima Akses ditolak; sidecar kini prefetch LID mapping untuk BotPhoneNumber, OwnerNumbers, dan KasirNumbers.",
+                "Normalisasi JID: nomor dengan suffix device seperti 628xxx:0@s.whatsapp.net sekarang dinormalisasi sebagai 628xxx, bukan 628xxx0.",
+                "Catatan testing: pesan yang dikirim dari WhatsApp Desktop akun bot sendiri adalah fromMe dan sengaja diabaikan; uji command harus dari nomor owner/kasir lain ke nomor bot.",
+                "Catatan operasional: percobaan pairing lama masih perlu restart aplikasi dan sidecar karena nilai cooldown dibaca saat sidecar start."
+            ],
+            "status": "draft"
+        },
+        {
+            "date": "2026-05-13",
+            "version": "5.0.0",
+            "title": "OCR Hybrid Pipeline, Gemini Vision, Text Receipt & Branding SA TECH.Inc",
+            "summary": [
+                "OCR HYBRID PIPELINE v3.0: Implementasi pipeline OCR cerdas yang menggabungkan preprocessing SkiaSharp, scoring confidence, dan Gemini Vision fallback untuk pembacaan faktur yang lebih stabil.",
+                "GEMINI VISION FALLBACK: Vision dipakai otomatis saat confidence OCR di bawah 60, sehingga faktur vendor sulit seperti Fastrata dan Wings lebih konsisten terbaca.",
+                "TEXT RECEIPT PARSER: Fitur baru /inputstruk memungkinkan tempel teks struk langsung ke chat tanpa kirim foto dan tanpa melewati pipeline OCR gambar.",
+                "FASTRATA PIPELINE FIX: Pemilihan hasil OCR sekarang memprioritaskan konsistensi vendor; jika vendor original dan preprocessed konflik, sistem mempertahankan hasil original.",
+                "WINGS NOISE FILTER: Penanganan item noise dan penalti garbage text diperketat untuk mengurangi false positive confidence dan item sampah dari hasil OCR multi-kolom.",
+                "BRANDING UPDATE: Publisher aplikasi diubah ke SA TECH.Inc dan metadata versi dinaikkan ke v5.0.0.",
+                "INSTALLER REVAMP: Installer Inno Setup diperbarui menjadi admin-only installer dengan metadata publisher, icon setup, dan EULA profesional."
+            ],
+            "details": [
+                "File impact utama: Services/AutomationEngine.cs, Models/AppConfig.cs, Services/ConfigService.cs, config.template.json, config.json.",
+                "OCR note: Threshold Vision aktif di confidence < 60. ComputeOcrConfidence kini menambahkan garbage-ratio penalty untuk mendeteksi teks OCR palsu yang penuh karakter acak.",
+                "Text receipt note: OcrReceipt.TextTriggerCaption default ke /inputstruk dan AutoDetectTextReceipt default false. Jalur ini langsung memanggil ParseReceiptAsync(rawText, imagePath: null).",
+                "Mapping note: Jalur foto dan jalur text receipt sekarang berbagi logic finalisasi mapping, queue review, dan pending confirmation OCR bulk restock.",
+                "Branding note: SmartSembakoAssistant.csproj diperbarui dengan Version 5.0.0, Company SA TECH.Inc, Product metadata, ApplicationIcon, serta resource logo aplikasi.",
+                "Installer note: deployment/SmartSembakoAssistant.iss sekarang menggunakan AppPublisher SA TECH.Inc, AppPublisherURL, VersionInfo metadata, SetupIconFile, dan tidak lagi menyediakan dialog override privilege.",
+                "Verification note: Perubahan telah disiapkan untuk diverifikasi dengan dotnet build setelah aset logo tersedia di folder Resources."
+            ],
+            "status": "draft"
+        },
         {
             "date": "2026-04-10",
             "version": "4.0.0",

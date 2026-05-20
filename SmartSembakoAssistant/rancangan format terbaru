@@ -1,0 +1,166 @@
+# 📋 Evaluasi Format Bot — Smart Sembako Assistant (Revisi Final)
+
+> Berdasarkan riwayat percakapan 03/05/2026 (pagi dan sore) + klarifikasi user.
+> Dibandingkan dengan `rancangan_format_response.md` (v1) & `rancangan_format_response_v2.md` (v2).
+
+---
+
+## ✅ Status Keseluruhan: ~95% Sesuai Rancangan
+
+Hampir semua command utama sudah sesuai format yang dirancang di v1 dan v2.
+
+---
+
+## ✅ Yang Sudah Sesuai Penuh
+
+| Command | Status | Catatan |
+|---|---|---|
+| `/start` (Guest mode) | ✅ Normal | Tampil singkat karena owner ID belum diisi — intentional |
+| `/start` (Owner mode) | ✅ Sesuai | Full menu lengkap setelah owner ID diisi |
+| `/help` | ✅ Sesuai | Identik dengan `/start` Owner mode |
+| `/stok [nama]` | ✅ Sesuai | Emoji 🟢🟡🔴 konsisten, format kolom rapi |
+| `/laporan` | ✅ Sesuai | Header, emoji, transaksi terakhir lengkap |
+| `/analisa` | ✅ Sesuai | Termasuk 🏆 Produk Terlaris (v2) |
+| `/dead_stock` | ✅ Sesuai | Flag ⚠️ untuk stok minus, total di bawah |
+| `/penjualan [nama]` | ✅ Sesuai | Format kolom + transaksi terakhir |
+| `/restock` single | ✅ Sesuai | Konfirmasi → button → hasil, semua benar |
+| `/inventory` single | ✅ Sesuai | Konfirmasi → button → hasil, semua benar |
+| `/notifikasi_stok` | ✅ Sesuai | Format `🚨 STOK KRITIS` dengan 🔴 per baris |
+| `/rekomendasi_restock` | ✅ Sesuai | Section perlu restock + review manual |
+| `/cek_modal` | ✅ Sesuai | Count `(15 dari 50 total)` sudah ada (v2) |
+| `/pelanggan [nama]` | ✅ Sesuai | Format `👥 PELANGGAN - "..."` |
+| `/supplier [nama]` | ✅ Sesuai | Format `🏭 SUPPLIER` |
+| `/dokumen [nomor]` | ✅ Sesuai | Detail lengkap + item tabel |
+| `/laporan_kasir` | ✅ Sesuai | Format `👤 PERFORMA KASIR` |
+| `/cancel` | ✅ Sesuai | Response `❌ Aksi dibatalkan` |
+| `/riwayat_inventory [nama]` | ✅ Sesuai | Format v2: ⬆️⬇️➡️ + satuan + total entri |
+| `/riwayat_restock [nama]` | ✅ Sesuai | Format v2: header tgl/qty/modal/total + total entri |
+| Inline button confirm/cancel | ✅ Normal | Button hilang setelah diklik = perilaku Telegram normal |
+
+---
+
+## 🗒️ Klarifikasi False-Alarm dari Evaluasi Sebelumnya
+
+| Issue Lama | Status Sebenarnya |
+|---|---|
+| `/start` tidak lengkap | ✅ Disengaja — Guest mode saat owner ID kosong. Owner mode sudah full. |
+| Konfirmasi otomatis tanpa `/confirm` | ✅ Normal — user klik inline button, bukan command. Riwayat chat tidak menampilkan klik button. |
+| `/penjualan` judul terpotong "jc" | ✅ Bukan bug — user mengedit pesan di Telegram setelah dikirim, bot respond ke pesan asli `/penjualan jc`. |
+
+---
+
+## 🔴 Satu-satunya Bug Nyata: AI Natural Language Ngawur
+
+Ini satu-satunya masalah yang perlu diperbaiki secara substansial.
+
+### Contoh Kasus dari Riwayat:
+
+| Pertanyaan User | Jawaban Bot | Problem |
+|---|---|---|
+| "Cek transaksi hj yuyun" | "Stok Kapal Api Mix: 63 Rcg" | Tidak relevan sama sekali |
+| "Cek transaksi mng kai" | Tabel omzet hari ini | Salah konteks |
+| "Gimana cara ganti nama toko?" | Data omzet dan profit | Tidak nyambung |
+| "Apa yang bisa kamu bantu?" | Menampilkan stok Kapal Api Mix | Tidak relevan |
+| "Namamu siapa?" | "Data tidak tersedia di sistem" | Harusnya: "Smart Sembako Assistant" |
+| "Selain itu ada lagi ga?" (tentang duplikat) | "Tidak ada data lain" | Tidak scan produk lain |
+| "Total berapa pelanggan?" | "Total pelanggan tidak tersedia" | Harusnya bisa count dari list |
+
+### Pola Root Cause:
+- AI tidak punya **slot pertanyaan yang jelas** — setiap pertanyaan bebas diinterpretasikan ulang
+- AI terlalu bergantung pada **data di context window saat itu** (stok Kapal Api Mix baru saja diproses → jadi "bocor" ke jawaban lain)
+- Pertanyaan tentang **identitas bot** tidak dijawab dengan baik
+- Pertanyaan tentang **count/jumlah** tidak bisa dijawab karena AI tidak tahu total record
+
+### Rekomendasi Perbaikan AI Prompt:
+
+```
+1. Tambahkan rule eksplisit di system prompt:
+   - "Jika ditanya 'namamu siapa' atau 'kamu apa', jawab: Saya Smart Sembako Assistant."
+   - "Jangan bocorkan data dari aksi sebelumnya ke pertanyaan yang berbeda."
+   - "Jika tidak tahu jawaban, arahkan ke command yang relevan, jangan karang data."
+
+2. Tambahkan intent kategorisasi:
+   - Intent: identitas bot → jawab dengan nama bot
+   - Intent: query pelanggan by name → gunakan /pelanggan command
+   - Intent: query transaksi → arahkan ke /dokumen atau /penjualan
+   - Intent: tidak dikenali → tampilkan /help
+
+3. Sediakan data count di context:
+   - Sertakan total_pelanggan, total_supplier, total_produk sebagai variabel
+   sehingga AI bisa menjawab "berapa total pelanggan?" dengan benar.
+```
+
+---
+
+## 🟡 Issues Minor yang Tersisa
+
+### 1. `/riwayat_inventory` & `/riwayat_restock` Tanpa Argumen — Tidak Informatif
+**Bukti:**
+```
+/riwayat_inventory
+→ Produk "" tidak ditemukan.
+```
+Sudah benar secara teknis (tidak ada produk yang dimaksud), tapi pesan errornya kurang ramah.
+
+**Rekomendasi:**
+```
+❌ Format salah.
+Gunakan: /riwayat_inventory <nama produk>
+Contoh: /riwayat_inventory kapal api mix
+```
+
+---
+
+### 2. `/user` (tanpa argumen) — Duplikasi Label Level
+**Bukti:**
+```
+Arifin (Level 12 Lv.12) ✅ Aktif
+```
+Label "Level 12" dan "Lv.12" muncul bersamaan karena penggabungan dua field.
+
+**Rekomendasi:**
+```
+Arifin (Lv.12) ✅ Aktif
+```
+
+---
+
+### 3. `/pelanggan` & `/supplier` (tanpa argumen) — Tidak Ada Total Count
+Saat list ditampilkan, tidak ada informasi berapa total item yang ada.
+
+**Rekomendasi:** Tambahkan baris di awal atau akhir:
+```
+👥 PELANGGAN (47 total)
+...
+```
+
+---
+
+### 4. `/stok [nama]` — Alignment Tidak Konsisten untuk Nama Panjang
+**Bukti:**
+```
+🟢 Kopi Kapal Api Spesial 30g 16 Rcg  Rp 5,000
+```
+Nama produk panjang membuat kolom angka tidak sejajar dengan baris lainnya.
+
+**Rekomendasi:** Potong nama produk di maksimal ~22 karakter jika perlu, atau gunakan baris baru untuk nilai stok.
+
+---
+
+## 📌 Ringkasan Prioritas
+
+| # | Issue | Prioritas | Effort |
+|---|---|---|---|
+| 1 | AI ngawur & tidak relevan | 🔴 Tinggi | Besar (system prompt + logic) |
+| 2 | Error message `/riwayat_*` tanpa argumen | 🟡 Sedang | Kecil |
+| 3 | `/user` duplikasi label level | 🟡 Sedang | Kecil |
+| 4 | `/pelanggan` & `/supplier` total count | 🟡 Sedang | Kecil |
+| 5 | `/stok` alignment nama panjang | 🟢 Rendah | Kecil |
+
+---
+
+## 🎯 Kesimpulan
+
+Format visual bot secara keseluruhan **sudah sangat baik dan sesuai rancangan v1 + v2**. Semua command utama sudah diimplementasikan dengan format yang rapi.
+
+Satu-satunya pekerjaan besar yang tersisa adalah **meningkatkan kualitas AI natural language** agar tidak menjawab ngawur. Sisanya adalah polesan minor yang mudah dikerjakan.

@@ -4,6 +4,6 @@
              xmlns:local="clr-namespace:SmartSembakoAssistant"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <BitmapImage x:Key="AppLogo" UriSource="Resources/logo.png" />
     </Application.Resources>
 </Application>

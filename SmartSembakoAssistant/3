@@ -1,0 +1,57 @@
+# Update Profit Calculation Logic for Aronium
+
+Untuk mengakomodasi mekanisme diskon dan pajak Aronium, kalkulasi profit (margin) harus diperbarui. Saat ini, sistem menggunakan perhitungan kotor:
+`Profit = (Price - ProductCost) * Quantity`
+
+Perhitungan ini belum memperhitungkan:
+1. **Item-level Discount**: Diskon spesifik per barang.
+2. **Document-level Discount**: Diskon total belanja yang diproporsikan ke setiap item.
+3. **Pajak (Tax)**: Tambahan harga dari pajak yang bukan merupakan profit.
+
+Di dalam skema database Aronium, tabel `DocumentItem` memiliki kolom `TotalAfterDocumentDiscount` yang menyimpan *Gross Revenue* (Total dibayar pelanggan untuk item tersebut, termasuk semua diskon dan pajak). Serta terdapat tabel `DocumentItemTax` yang merekam jumlah pajak per item.
+
+Oleh karena itu, formula *Net Profit* yang akurat adalah:
+`Profit = TotalAfterDocumentDiscount - TaxAmount - (ProductCost * Quantity)`
+
+## User Review Required
+
+> [!WARNING]
+> Perubahan ini akan mengubah semua angka profit di laporan dan dashboard. Angka profit baru akan lebih kecil atau berbeda jika toko Anda banyak menggunakan fitur Diskon (Item/Nota) atau Pajak. Mohon konfirmasi apakah formula di atas sesuai dengan ekspektasi bisnis Anda.
+
+## Proposed Changes
+
+### Database Service
+
+Akan dilakukan update menyeluruh pada file service utama yang menangani pembacaan database.
+
+#### [MODIFY] PosDbService.cs (file:///d:/HOME/smart%20sembako/Smart-Sembako-Assistant/SmartSembakoAssistant/Services/PosDbService.cs)
+
+1. **Update `GetTodayProfitAsync` dan `GetSalesProfitAsync`**
+   Mengubah query SQL menjadi:
+   ```sql
+   SELECT COALESCE(SUM(
+       di.TotalAfterDocumentDiscount - 
+       COALESCE((SELECT SUM(Amount) FROM DocumentItemTax WHERE DocumentItemId = di.Id), 0) - 
+       (di.ProductCost * di.Quantity)
+   ), 0)
+   ```
+
+2. **Update `GetProductSalesTransactionsAsync`**
+   Mengubah C# loop:
+   ```csharp
+   // Tambahkan join ke DocumentItemTax (atau select subquery) untuk mengambil Tax
+   // Total = di.TotalAfterDocumentDiscount
+   // Profit = (Total - Tax) - (ProductCost * Quantity)
+   ```
+
+3. **Update `GetDailySalesAsync` & Analytics Lainnya**
+   Sama seperti di atas, semua agregasi profit di-replace dengan formula `TotalAfterDocumentDiscount - Tax - COGS`.
+
+## Verification Plan
+
+### Automated Tests
+- Menjalankan unit tests jika ada untuk melihat apakah kompilasi C# berhasil.
+- Menjalankan bot/aplikasi untuk memastikan tidak ada query SQLite yang crash.
+
+### Manual Verification
+- Cek fitur 'analitik penjualan' dan 'ringkasan hari ini' di aplikasi WPF atau via Chat, dan membandingkan angkanya dengan aplikasi desktop Aronium asli di hari yang sama untuk memastikan sinkronisasi profit sudah akurat.
