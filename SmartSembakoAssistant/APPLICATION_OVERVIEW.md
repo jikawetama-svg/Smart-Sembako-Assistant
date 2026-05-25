@@ -33,4 +33,5 @@ Smart Sembako Assistant adalah desktop automation engine untuk operasional toko 
 
 ## Referensi pengguna
 - [SETTINGS_GUIDE.md](SETTINGS_GUIDE.md)
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
+- [QUICK_START.md](QUICK_START.md)
+- [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md)

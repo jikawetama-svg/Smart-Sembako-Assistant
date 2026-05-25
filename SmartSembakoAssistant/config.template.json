@@ -44,7 +44,7 @@
   },
   "Baileys": {
     "Enabled": true,
-    "BotPhoneNumber": "6281234567890",
+    "BotPhoneNumber": "",
     "NodeBinaryPath": "runtimes\\node\\node.exe",
     "SidecarEntryPath": "Integrations\\BaileysSidecar\\index.js",
     "WorkingDirectory": "Integrations\\BaileysSidecar",

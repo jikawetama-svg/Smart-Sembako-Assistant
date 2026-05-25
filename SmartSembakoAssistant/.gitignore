@@ -30,10 +30,13 @@ bld/
 
 # SmartSembakoAssistant specific
 config.json
+*.env
+.env*
 data/memory.db
 data/logs/*
 !data/logs/.gitkeep
 artifacts/
+runtimes/
 
 # Google Service Account keys (RAHASIA - jangan commit!)
 *-b2b070766971.json
@@ -41,8 +44,12 @@ automation-sheets-*.json
 *service-account*.json
 *credentials*.json
 
-# Tessdata binary (besar, tidak perlu di repo)
-tessdata/
+# Tessdata runtime wajib untuk OCR installer
+tessdata/*
+!tessdata/
+!tessdata/ind.traineddata
+!tessdata/eng.traineddata
+!tessdata/.gitkeep
 
 # Codex build artifacts
 .codex-build/
@@ -55,6 +62,7 @@ data/*.db
 # Archive/binary tidak perlu
 *.rar
 *.zip
+*.exe
 
 # AI/Qwen
 .qwen/

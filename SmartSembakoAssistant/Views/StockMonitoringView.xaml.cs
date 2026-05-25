@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Threading;
 using SmartSembakoAssistant.Controls;
 using SmartSembakoAssistant.Models;
 using SmartSembakoAssistant.Services;
@@ -13,9 +16,12 @@ namespace SmartSembakoAssistant.Views
         private readonly DatabaseService _databaseService;
         private readonly LoggingService _loggingService;
         private readonly PosDbService? _posDbService;
-        
-        private ObservableCollection<Product> _products = new();
-        private List<Product> _allProducts = new();
+
+        private readonly ObservableCollection<Product> _products = new();
+        private ICollectionView? _productsView;
+        private DispatcherTimer? _searchDebounceTimer;
+        private string _activeStockFilter = "Semua";
+        private bool _hasLoaded;
 
         public StockMonitoringView(
             ConfigService configService,
@@ -30,29 +36,52 @@ namespace SmartSembakoAssistant.Views
             _loggingService = loggingService;
             _posDbService = posDbService;
 
-            LvProducts.ItemsSource = _products;
-            LoadProducts();
+            _productsView = CollectionViewSource.GetDefaultView(_products);
+            _productsView.Filter = ProductFilter;
+            DgProducts.ItemsSource = _productsView;
+
+            _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _searchDebounceTimer.Tick += (_, _) =>
+            {
+                _searchDebounceTimer?.Stop();
+                RefreshProductView();
+            };
+
+            Loaded += async (_, _) =>
+            {
+                if (!_hasLoaded)
+                {
+                    _hasLoaded = true;
+                    await LoadProductsAsync();
+                }
+            };
         }
 
-        private async void LoadProducts()
+        private async Task LoadProductsAsync()
         {
             if (_posDbService == null)
             {
-                ToastHelper.ShowWarning("Database Not Configured", "Database pos.db belum dikonfigurasi.\n\nSilakan konfigurasi di Settings terlebih dahulu.", Window.GetWindow(this));
+                ToastHelper.ShowWarning(
+                    "Database Not Configured",
+                    "Database pos.db belum dikonfigurasi. Silakan konfigurasi di Settings terlebih dahulu.",
+                    Window.GetWindow(this));
+                TxtProductCount.Text = "Database belum dikonfigurasi.";
                 return;
             }
 
             try
             {
-                _allProducts = await _posDbService.GetAllProductsAsync();
+                SetLoading(true);
+                var products = await _posDbService.GetAllProductsAsync();
+
                 _products.Clear();
-                foreach (var product in _allProducts)
+                foreach (var product in products)
                 {
                     _products.Add(product);
                 }
 
-                // Update quick stats
                 UpdateQuickStats();
+                RefreshProductView();
             }
             catch (Exception ex)
             {
@@ -63,93 +92,106 @@ namespace SmartSembakoAssistant.Views
 
                 ToastHelper.ShowError("Error", $"Error loading products: {ex.Message}", Window.GetWindow(this));
             }
+            finally
+            {
+                SetLoading(false);
+            }
+        }
+
+        private void SetLoading(bool isLoading)
+        {
+            TxtLoading.Visibility = isLoading ? Visibility.Visible : Visibility.Collapsed;
+            BtnRefresh.IsEnabled = !isLoading;
+            BtnRefresh.Content = isLoading ? "Memuat..." : "Refresh";
         }
 
         private void UpdateQuickStats()
         {
-            int safeStock = _allProducts.Count(p => p.Stock > 10);
-            int lowStock = _allProducts.Count(p => p.Stock > 0 && p.Stock <= 10);
-            int outStock = _allProducts.Count(p => p.Stock == 0);
-            int negativeStock = _allProducts.Count(p => p.Stock < 0);
+            TxtTotalStock.Text = _products.Count.ToString();
+            TxtSafeStock.Text = _products.Count(p => p.Stock > 10).ToString();
+            TxtLowStock.Text = _products.Count(p => p.Stock > 0 && p.Stock <= 10).ToString();
+            TxtOutStock.Text = _products.Count(p => p.Stock == 0).ToString();
+            TxtNegativeStock.Text = _products.Count(p => !p.Stock.HasValue || p.Stock < 0).ToString();
+        }
 
-            TxtSafeStock.Text = safeStock.ToString();
-            TxtLowStock.Text = lowStock.ToString();
-            TxtOutStock.Text = outStock.ToString();
-            TxtNegativeStock.Text = negativeStock.ToString();
+        private bool ProductFilter(object item)
+        {
+            if (item is not Product product)
+            {
+                return false;
+            }
+
+            var searchText = TxtSearch?.Text?.Trim().ToLowerInvariant() ?? "";
+            if (!string.IsNullOrWhiteSpace(searchText))
+            {
+                var matchesName = product.Name?.ToLowerInvariant().Contains(searchText) == true;
+                var matchesSku = product.Sku?.ToLowerInvariant().Contains(searchText) == true;
+                if (!matchesName && !matchesSku)
+                {
+                    return false;
+                }
+            }
+
+            return _activeStockFilter switch
+            {
+                "Minus" => !product.Stock.HasValue || product.Stock < 0,
+                "Habis" => product.Stock == 0,
+                "Rendah" => product.Stock > 0 && product.Stock <= 10,
+                "Aman" => product.Stock > 10,
+                _ => true
+            };
+        }
+
+        private void RefreshProductView()
+        {
+            _productsView?.Refresh();
+            UpdateFooterCount();
+        }
+
+        private void UpdateFooterCount()
+        {
+            var filteredCount = _productsView?.Cast<object>().Count() ?? 0;
+            TxtProductCount.Text = $"Menampilkan {filteredCount:N0} dari {_products.Count:N0} produk (Filter: {_activeStockFilter})";
         }
 
         private void TxtSearch_TextChanged(object sender, TextChangedEventArgs e)
         {
-            FilterProducts();
+            _searchDebounceTimer?.Stop();
+            _searchDebounceTimer?.Start();
         }
 
-        private void BtnAll_Click(object sender, RoutedEventArgs e)
+        private void StockFilter_Click(object sender, RoutedEventArgs e)
         {
-            FilterProducts();
+            if (sender is Button button && button.Tag is string filter)
+            {
+                _activeStockFilter = filter;
+                UpdateFilterButtonStyles(button);
+                RefreshProductView();
+            }
         }
 
-        private void BtnLowStock_Click(object sender, RoutedEventArgs e)
+        private void UpdateFilterButtonStyles(Button activeButton)
         {
-            FilterProducts(lowStockOnly: true);
-        }
+            var inactiveStyle = FindResource("FilterButtonStyle") as Style;
+            var activeStyle = FindResource("FilterButtonActiveStyle") as Style;
 
-        private void BtnExpiring_Click(object sender, RoutedEventArgs e)
-        {
-            FilterProducts(expiringOnly: true);
+            BtnAll.Style = inactiveStyle;
+            BtnMinus.Style = inactiveStyle;
+            BtnOut.Style = inactiveStyle;
+            BtnLowStock.Style = inactiveStyle;
+            BtnSafe.Style = inactiveStyle;
+
+            activeButton.Style = activeStyle;
         }
 
         private async void BtnRefresh_Click(object sender, RoutedEventArgs e)
         {
-            BtnRefresh.IsEnabled = false;
-            BtnRefresh.Content = "⏳ Refreshing...";
-
-            await Task.Delay(500); // Small delay for UX
-            LoadProducts();
-
-            BtnRefresh.IsEnabled = true;
-            BtnRefresh.Content = "🔄 Refresh";
+            await LoadProductsAsync();
         }
 
-        private void FilterProducts(bool lowStockOnly = false, bool expiringOnly = false)
-        {
-            string searchText = TxtSearch.Text?.ToLower() ?? "";
-
-            var filtered = _allProducts.AsEnumerable();
-
-            // Apply search filter
-            if (!string.IsNullOrEmpty(searchText))
-            {
-                filtered = filtered.Where(p =>
-                    p.Name != null && p.Name.ToLower().Contains(searchText));
-            }
-
-            // Apply low stock filter - handle null Stock properly
-            if (lowStockOnly)
-            {
-                filtered = filtered.Where(p => p.Stock.HasValue && p.Stock <= 20);
-            }
-
-            // Apply expiring filter
-            if (expiringOnly)
-            {
-                filtered = filtered.Where(p =>
-                    p.ExpiryDate.HasValue && 
-                    p.ExpiryDate.Value <= DateTime.Now.AddDays(30));
-            }
-
-            _products.Clear();
-            foreach (var product in filtered)
-            {
-                _products.Add(product);
-            }
-        }
-
-        /// <summary>
-        /// Public method to reload data (called from MainWindow sync)
-        /// </summary>
         public async Task LoadDataAsync()
         {
-            LoadProducts();
+            await LoadProductsAsync();
         }
     }
 }

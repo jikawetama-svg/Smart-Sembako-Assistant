@@ -10,6 +10,8 @@
 - `TunnelManager`: process manager untuk tunnel eksternal, default `cloudflared`.
 - `BotController`: lifecycle orchestration dan background automation tick.
 - `PosDbService`: akses data Aronium dan pembuatan dokumen purchase / inventory count.
+- `GoogleSheetsService`: low-level Google Sheets header, replace, append, dedupe, upsert, chunking, dan retry.
+- `GoogleSheetsSyncService`: sync tab prioritas `Dashboard`, `Stok_Kritis`, `Penjualan_Harian`, `Piutang`, dan `Pembelian`.
 - `ConfigService`: JSON config + DPAPI encryption untuk secret.
 - `DatabaseService`: memory/log/RBAC SQLite lokal plus inbound dedupe, outbound queue, delivery status, automation execution, dan runtime state.
 
@@ -32,6 +34,7 @@
 - `Tunnel`
 - `Automation`
 - `PosDb`
+- `GoogleSheets`
 - `Notifications`
 - `App`
 - `Setup`
@@ -44,7 +47,9 @@
 - Tunnel manager mendukung mode `cloudflared`, `external-process`, atau `manual`.
 - Baileys berjalan sebagai sidecar Node dan berkomunikasi dengan desktop app lewat HTTP lokal.
 - Wizard menyimpan jalur cepat ke mode `Baileys` dengan field utama `BotPhoneNumber`, `OwnerNumbers`, dan `Groq ApiKey`.
+- Google Sheets sync memakai header migration, replace/upsert, dedupe key, retry 429/5xx, dan tidak menggagalkan daily summary jika sinkronisasi gagal.
 
 ## Dokumen operasional
 - [SETTINGS_GUIDE.md](SETTINGS_GUIDE.md)
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
+- [QUICK_START.md](QUICK_START.md)
+- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)

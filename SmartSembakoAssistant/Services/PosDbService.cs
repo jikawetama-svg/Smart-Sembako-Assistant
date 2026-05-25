@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using SmartSembakoAssistant.Models;
@@ -13,6 +14,8 @@ namespace SmartSembakoAssistant.Services
         private readonly string _dbPath;
         private readonly LoggingService? _loggingService;
         private readonly ProductSchemaMetadata _productSchema;
+        private readonly SemaphoreSlim _tablesCacheLock = new(1, 1);
+        private List<string>? _tablesCache;
 
         public string SchemaStatus => _productSchema.Status;
         public DateTime? LastSchemaValidatedAt { get; private set; }
@@ -96,10 +99,21 @@ namespace SmartSembakoAssistant.Services
 
         private async Task<List<string>> GetAvailableTablesAsync(SqliteConnection connection)
         {
-            var tables = new List<string>();
+            if (_tablesCache != null)
+            {
+                return _tablesCache;
+            }
+
+            await _tablesCacheLock.WaitAsync();
 
             try
             {
+                if (_tablesCache != null)
+                {
+                    return _tablesCache;
+                }
+
+                var tables = new List<string>();
                 string sql = "SELECT name FROM sqlite_master WHERE type='table'";
                 using var command = new SqliteCommand(sql, connection);
                 using var reader = await command.ExecuteReaderAsync();
@@ -108,13 +122,19 @@ namespace SmartSembakoAssistant.Services
                 {
                     tables.Add(reader.GetString(0));
                 }
+
+                _tablesCache = tables;
+                return tables;
             }
             catch
             {
                 // Ignore errors
+                return new List<string>();
             }
-
-            return tables;
+            finally
+            {
+                _tablesCacheLock.Release();
+            }
         }
 
         private string? FindTable(List<string> tables, string[] possibleNames)
@@ -533,61 +553,62 @@ namespace SmartSembakoAssistant.Services
 
                 var tables = await GetAvailableTablesAsync(connection);
 
-                // Cek apakah ada tabel expiry-related
                 string? expiryTable = FindTable(tables, new[] { "DocumentItemExpirationDate", "expiry", "expiration", "batch" });
                 string? productTable = FindTable(tables, new[] { "Product", "products" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                string? stockTable = FindTable(tables, new[] { "Stock", "stock" });
 
-                if (string.IsNullOrEmpty(expiryTable) || string.IsNullOrEmpty(productTable))
+                if (string.IsNullOrEmpty(expiryTable) ||
+                    string.IsNullOrEmpty(productTable) ||
+                    string.IsNullOrEmpty(documentItemTable) ||
+                    string.IsNullOrEmpty(stockTable))
                 {
-                    // Tabel expiry tidak ada, kembalikan kosong
                     if (_loggingService != null)
                     {
                         await _loggingService.LogInfoAsync(
-                            "Tabel expiry tidak ditemukan, skip expiry check", "Database");
+                            "Tabel expiry/document item/stock tidak ditemukan, skip expiry check", "Database");
                     }
                     return products;
                 }
 
-                // Cek kolom yang tersedia di tabel expiry
                 var columns = await GetTableColumnsAsync(connection, expiryTable);
                 bool hasBatchNumber = columns.Any(c => c.Equals("BatchNumber", StringComparison.OrdinalIgnoreCase));
                 bool hasExpirationDate = columns.Any(c => c.Equals("ExpirationDate", StringComparison.OrdinalIgnoreCase) || c.Equals("ExpiryDate", StringComparison.OrdinalIgnoreCase));
-                
-                // Cari kolom foreign key ke Product (bisa ProductId, DocumentItemId, atau lainnya)
-                string? fkColumn = columns.FirstOrDefault(c => 
-                    c.Contains("ProductId", StringComparison.OrdinalIgnoreCase) || 
-                    c.Contains("Product_Id", StringComparison.OrdinalIgnoreCase) ||
-                    c.Equals("ItemId", StringComparison.OrdinalIgnoreCase));
+                bool hasDocumentItemId = columns.Any(c => c.Equals("DocumentItemId", StringComparison.OrdinalIgnoreCase));
 
-                if (!hasExpirationDate || string.IsNullOrEmpty(fkColumn))
+                if (!hasExpirationDate || !hasDocumentItemId)
                 {
                     if (_loggingService != null)
                     {
                         await _loggingService.LogInfoAsync(
-                            $"Kolom yang diperlukan tidak ditemukan di tabel expiry (DateColumn: {hasExpirationDate}, FK: {fkColumn})", "Database");
+                            $"Kolom wajib tidak ditemukan di tabel expiry (ExpirationDate: {hasExpirationDate}, DocumentItemId: {hasDocumentItemId})", "Database");
                     }
                     return products;
                 }
 
-                // Gunakan kolom yang tersedia
                 string dateColumn = hasExpirationDate ? "ExpirationDate" : "ExpiryDate";
                 string batchColumn = hasBatchNumber ? "e.BatchNumber" : "NULL";
 
-                // Aronium schema: DocumentItemExpirationDate (mungkin pakai kolom berbeda)
                 string sql = $@"
-                    SELECT DISTINCT
+                    SELECT
                         p.Id, p.Name, p.Code, pg.Name as Category, p.MeasurementUnit,
-                        NULL as Stock,
+                        COALESCE(s.Quantity, 0) as Stock,
                         p.Cost, p.Price,
                         p.IsEnabled,
-                        e.{dateColumn} as ExpiryDate,
-                        {batchColumn} as BatchNumber
-                    FROM {ValidateTableName(productTable)} p
-                    INNER JOIN {ValidateTableName(expiryTable)} e ON p.Id = e.{fkColumn}
+                        MAX(e.{dateColumn}) as ExpiryDate,
+                        MAX({batchColumn}) as BatchNumber
+                    FROM {ValidateTableName(expiryTable)} e
+                    INNER JOIN {ValidateTableName(documentItemTable)} di ON di.Id = e.DocumentItemId
+                    INNER JOIN {ValidateTableName(productTable)} p ON p.Id = di.ProductId
+                    INNER JOIN {ValidateTableName(stockTable)} s
+                        ON s.ProductId = p.Id
+                       AND s.WarehouseId = {PreferredWarehouseIdSql}
                     LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
                     WHERE e.{dateColumn} <= date('now', '+{daysBefore} days')
-                    AND p.IsEnabled = 1
-                    ORDER BY e.{dateColumn} ASC";
+                      AND p.IsEnabled = 1
+                      AND COALESCE(s.Quantity, 0) != 0
+                    GROUP BY p.Id, p.Name, p.Code, pg.Name, p.MeasurementUnit, s.Quantity, p.Cost, p.Price, p.IsEnabled
+                    ORDER BY ExpiryDate ASC";
 
                 using var command = new SqliteCommand(sql, connection);
                 using var reader = await command.ExecuteReaderAsync();
@@ -605,7 +626,7 @@ namespace SmartSembakoAssistant.Services
                         PurchasePrice = SafeConvertToDecimal(reader, 6),
                         SellingPrice = SafeConvertToDecimal(reader, 7),
                         IsActive = reader.IsDBNull(8) || Convert.ToBoolean(reader.GetValue(8)),
-                        ExpiryDate = reader.IsDBNull(9) ? null : reader.GetDateTime(9),
+                        ExpiryDate = SafeConvertToDateTime(reader, 9),
                         BatchNumber = reader.IsDBNull(10) ? null : reader.GetValue(10).ToString()
                     });
                 }
@@ -1539,6 +1560,7 @@ namespace SmartSembakoAssistant.Services
 
                 var tables = await GetAvailableTablesAsync(connection);
                 string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
                 string? paymentTable = FindTable(tables, new[] { "Payment", "payments", "pembayaran" });
                 string? paymentTypeTable = FindTable(tables, new[] { "PaymentType", "payment_types", "jenis_pembayaran" });
 
@@ -1568,6 +1590,9 @@ namespace SmartSembakoAssistant.Services
                 string outstandingExpr = hasPaymentTable
                     ? $"MAX(d.Total - ({paidAmountExpr}), 0)"
                     : "CASE WHEN d.PaidStatus = 1 THEN d.Total ELSE 0 END";
+                string itemCountExpr = string.IsNullOrEmpty(documentItemTable)
+                    ? "0"
+                    : $"(SELECT COUNT(1) FROM {ValidateTableName(documentItemTable)} di WHERE di.DocumentId = d.Id)";
 
                 string sql = $@"
                     SELECT
@@ -1576,7 +1601,8 @@ namespace SmartSembakoAssistant.Services
                         d.Date,
                         d.Total,
                         {paidAmountExpr} as PaidAmount,
-                        {outstandingExpr} as OutstandingBalance
+                        {outstandingExpr} as OutstandingBalance,
+                        {itemCountExpr} as ItemCount
                     FROM {ValidateTableName(documentTable)} d
                     {paymentJoinSql}
                     WHERE d.CustomerId = @customerId
@@ -1599,7 +1625,8 @@ namespace SmartSembakoAssistant.Services
                         Date = SafeConvertToDateTime(reader, 2),
                         Total = SafeConvertToDecimal(reader, 3) ?? 0,
                         PaidAmount = SafeConvertToDecimal(reader, 4) ?? 0,
-                        OutstandingBalance = SafeConvertToDecimal(reader, 5) ?? 0
+                        OutstandingBalance = SafeConvertToDecimal(reader, 5) ?? 0,
+                        ItemCount = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6))
                     });
                 }
             }
@@ -1798,6 +1825,82 @@ namespace SmartSembakoAssistant.Services
             }
 
             return invoices;
+        }
+
+        public async Task<List<CustomerFavoriteProduct>> GetCustomerFavoriteProductsAsync(string customerId, int limit = 5)
+        {
+            var products = new List<CustomerFavoriteProduct>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                string? productTable = FindTable(tables, new[] { "Product", "products" });
+
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                {
+                    return products;
+                }
+
+                string productJoin = string.IsNullOrEmpty(productTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(productTable)} p ON di.ProductId = p.Id";
+                string productNameSql = string.IsNullOrEmpty(productTable)
+                    ? "di.ProductId"
+                    : "COALESCE(p.Name, di.ProductId)";
+                string unitSql = string.IsNullOrEmpty(productTable)
+                    ? "NULL"
+                    : GetProductUnitSql("p");
+
+                string sql = $@"
+                    SELECT
+                        di.ProductId,
+                        {productNameSql} as ProductName,
+                        {unitSql} as Unit,
+                        COALESCE(SUM(di.Quantity), 0) as Quantity,
+                        COALESCE(SUM(di.Total), 0) as Total,
+                        COUNT(DISTINCT d.Id) as TransactionCount
+                    FROM {ValidateTableName(documentItemTable)} di
+                    INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
+                    {productJoin}
+                    WHERE d.CustomerId = @customerId
+                    AND d.DocumentTypeId = 2
+                    GROUP BY di.ProductId, ProductName, Unit
+                    ORDER BY TransactionCount DESC, Quantity DESC, Total DESC, ProductName
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@customerId", customerId);
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    products.Add(new CustomerFavoriteProduct
+                    {
+                        ProductId = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        ProductName = reader.IsDBNull(1) ? null : reader.GetValue(1).ToString(),
+                        Unit = reader.IsDBNull(2) ? null : reader.GetValue(2).ToString(),
+                        Quantity = SafeConvertToDecimal(reader, 3) ?? 0,
+                        Total = SafeConvertToDecimal(reader, 4) ?? 0,
+                        TransactionCount = reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5))
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading customer favorite products: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return products;
         }
 
         public async Task<decimal> GetTotalReceivableAsync()
@@ -2155,6 +2258,188 @@ namespace SmartSembakoAssistant.Services
             return null;
         }
 
+        public async Task<List<DocumentInfo>> GetDocumentsByNumberSuffixAsync(string numberSuffix, int? documentTypeId = null, int limit = 5)
+        {
+            var documents = new List<DocumentInfo>();
+            string suffix = (numberSuffix ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(suffix))
+            {
+                return documents;
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? customerTable = FindTable(tables, new[] { "Customer", "customers", "pelanggan" });
+                string? userTable = FindTable(tables, new[] { "User", "users", "pengguna" });
+
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return documents;
+                }
+
+                string customerJoin = string.IsNullOrEmpty(customerTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(customerTable)} c ON d.CustomerId = c.Id";
+                string userJoin = string.IsNullOrEmpty(userTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(userTable)} u ON d.UserId = u.Id";
+                string customerSelect = string.IsNullOrEmpty(customerTable) ? "NULL as CustomerName" : "c.Name as CustomerName";
+                string userSelect = string.IsNullOrEmpty(userTable)
+                    ? "NULL as UserName"
+                    : "TRIM(COALESCE(u.FirstName, '') || ' ' || COALESCE(u.LastName, '')) as UserName";
+                string typeFilter = documentTypeId.HasValue ? "AND d.DocumentTypeId = @documentTypeId" : string.Empty;
+
+                string sql = $@"
+                    SELECT
+                        d.Id,
+                        d.Number,
+                        d.DocumentTypeId,
+                        d.Date,
+                        d.UserId,
+                        {userSelect},
+                        d.CustomerId,
+                        {customerSelect},
+                        d.Total
+                    FROM {ValidateTableName(documentTable)} d
+                    {customerJoin}
+                    {userJoin}
+                    WHERE substr(d.Number, -length(@suffix)) = @suffix
+                    {typeFilter}
+                    ORDER BY d.Date DESC, d.Id DESC
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@suffix", suffix);
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+                if (documentTypeId.HasValue)
+                {
+                    command.Parameters.AddWithValue("@documentTypeId", documentTypeId.Value);
+                }
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    int typeId = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
+                    documents.Add(new DocumentInfo
+                    {
+                        Id = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        Number = reader.IsDBNull(1) ? null : reader.GetValue(1).ToString(),
+                        DocumentTypeId = typeId,
+                        DocumentTypeLabel = GetDocumentTypeLabel(typeId),
+                        Date = SafeConvertToDateTime(reader, 3),
+                        UserId = reader.IsDBNull(4) ? null : reader.GetValue(4).ToString(),
+                        UserName = reader.IsDBNull(5) ? null : reader.GetValue(5).ToString(),
+                        CustomerId = reader.IsDBNull(6) ? null : reader.GetValue(6).ToString(),
+                        CustomerName = reader.IsDBNull(7) ? null : reader.GetValue(7).ToString(),
+                        Total = SafeConvertToDecimal(reader, 8) ?? 0
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading documents by suffix: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return documents;
+        }
+
+        public async Task<List<DocumentInfo>> GetRecentDocumentsAsync(int? documentTypeId = null, int limit = 5)
+        {
+            var documents = new List<DocumentInfo>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? customerTable = FindTable(tables, new[] { "Customer", "customers", "pelanggan" });
+                string? userTable = FindTable(tables, new[] { "User", "users", "pengguna" });
+
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return documents;
+                }
+
+                string customerJoin = string.IsNullOrEmpty(customerTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(customerTable)} c ON d.CustomerId = c.Id";
+                string userJoin = string.IsNullOrEmpty(userTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(userTable)} u ON d.UserId = u.Id";
+                string customerSelect = string.IsNullOrEmpty(customerTable) ? "NULL as CustomerName" : "c.Name as CustomerName";
+                string userSelect = string.IsNullOrEmpty(userTable)
+                    ? "NULL as UserName"
+                    : "TRIM(COALESCE(u.FirstName, '') || ' ' || COALESCE(u.LastName, '')) as UserName";
+                string typeFilter = documentTypeId.HasValue ? "AND d.DocumentTypeId = @documentTypeId" : string.Empty;
+
+                string sql = $@"
+                    SELECT
+                        d.Id,
+                        d.Number,
+                        d.DocumentTypeId,
+                        d.Date,
+                        d.UserId,
+                        {userSelect},
+                        d.CustomerId,
+                        {customerSelect},
+                        d.Total
+                    FROM {ValidateTableName(documentTable)} d
+                    {customerJoin}
+                    {userJoin}
+                    WHERE 1 = 1
+                    {typeFilter}
+                    ORDER BY d.Date DESC, d.Id DESC
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+                if (documentTypeId.HasValue)
+                {
+                    command.Parameters.AddWithValue("@documentTypeId", documentTypeId.Value);
+                }
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    int typeId = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
+                    documents.Add(new DocumentInfo
+                    {
+                        Id = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        Number = reader.IsDBNull(1) ? null : reader.GetValue(1).ToString(),
+                        DocumentTypeId = typeId,
+                        DocumentTypeLabel = GetDocumentTypeLabel(typeId),
+                        Date = SafeConvertToDateTime(reader, 3),
+                        UserId = reader.IsDBNull(4) ? null : reader.GetValue(4).ToString(),
+                        UserName = reader.IsDBNull(5) ? null : reader.GetValue(5).ToString(),
+                        CustomerId = reader.IsDBNull(6) ? null : reader.GetValue(6).ToString(),
+                        CustomerName = reader.IsDBNull(7) ? null : reader.GetValue(7).ToString(),
+                        Total = SafeConvertToDecimal(reader, 8) ?? 0
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading recent documents: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return documents;
+        }
+
         public async Task<List<DocumentItemInfo>> GetDocumentItemsAsync(string documentId)
         {
             var items = new List<DocumentItemInfo>();
@@ -2293,11 +2578,12 @@ namespace SmartSembakoAssistant.Services
         }
 
         /// <summary>
-        /// Mendapatkan produk Slow Moving (Stok > 0 tapi tidak laku 7 hari terakhir)
+        /// Mendapatkan produk slow moving: masih ada stok, masih pernah terjual,
+        /// volume rendah dalam periode analisis, dan bukan dead stock.
         /// </summary>
-        public async Task<List<Product>> GetSlowMovingProductsAsync()
+        public async Task<List<SlowMovingProductInsight>> GetSlowMovingProductsAsync(int days = 30, int thresholdQty = 5, int limit = 20)
         {
-            var products = new List<Product>();
+            var products = new List<SlowMovingProductInsight>();
 
             try
             {
@@ -2310,48 +2596,72 @@ namespace SmartSembakoAssistant.Services
                 string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
                 string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
 
-                if (string.IsNullOrEmpty(productTable) || string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                if (string.IsNullOrEmpty(productTable) ||
+                    string.IsNullOrEmpty(stockTable) ||
+                    string.IsNullOrEmpty(documentTable) ||
+                    string.IsNullOrEmpty(documentItemTable))
+                {
                     return products;
+                }
 
-                // Cari produk yang stoknya > 0 TAPI tidak ada di transaksi 7 hari terakhir
+                string salesStartDate = DateTime.Today.AddDays(-Math.Max(1, days)).ToString("yyyy-MM-dd");
                 string sql = $@"
-                    SELECT 
-                        p.Id, p.Name, p.Code, pg.Name as Category, p.MeasurementUnit,
-                        COALESCE(s.Quantity, 0) as Stock,
-                        p.Cost, p.Price,
-                        p.IsEnabled
+                    WITH sold AS (
+                        SELECT di.ProductId, SUM(di.Quantity) as QtySold, MAX(d.Date) as LastSaleDate
+                        FROM {ValidateTableName(documentItemTable)} di
+                        INNER JOIN {ValidateTableName(documentTable)} d ON d.Id = di.DocumentId
+                        WHERE d.DocumentTypeId = 2
+                          AND date(d.Date) >= @salesStartDate
+                        GROUP BY di.ProductId
+                    ),
+                    category_average AS (
+                        SELECT p.ProductGroupId, AVG(COALESCE(sold.QtySold, 0)) as AverageQty
+                        FROM {ValidateTableName(productTable)} p
+                        LEFT JOIN sold ON sold.ProductId = p.Id
+                        WHERE p.IsEnabled = 1
+                        GROUP BY p.ProductGroupId
+                    )
+                    SELECT
+                        p.Id,
+                        p.Name,
+                        {GetProductUnitSql("p")} as Unit,
+                        pg.Name as Category,
+                        COALESCE(s.Quantity, 0) as CurrentStock,
+                        COALESCE(sold.QtySold, 0) as QtySold,
+                        COALESCE(ca.AverageQty, 0) as AverageCategoryQty,
+                        sold.LastSaleDate
                     FROM {ValidateTableName(productTable)} p
                     LEFT JOIN {ValidateTableName(stockTable)} s
                         ON p.Id = s.ProductId
                        AND s.WarehouseId = {PreferredWarehouseIdSql}
                     LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
+                    LEFT JOIN sold ON sold.ProductId = p.Id
+                    LEFT JOIN category_average ca ON
+                        (p.ProductGroupId = ca.ProductGroupId OR (p.ProductGroupId IS NULL AND ca.ProductGroupId IS NULL))
                     WHERE p.IsEnabled = 1
-                    AND (s.Quantity > 0 OR s.Quantity IS NULL)
-                    AND p.Id NOT IN (
-                        SELECT DISTINCT di.ProductId 
-                        FROM {ValidateTableName(documentItemTable)} di
-                        INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
-                        WHERE date(d.Date) >= date('now', '-7 days', 'localtime')
-                    )
-                    ORDER BY p.Name
-                    LIMIT 20"; // Batasi 20 item teratas
+                      AND COALESCE(sold.QtySold, 0) > 0
+                      AND COALESCE(ca.AverageQty, 0) > 0
+                      AND COALESCE(sold.QtySold, 0) < ca.AverageQty * 0.4
+                    ORDER BY (COALESCE(sold.QtySold, 0) / NULLIF(ca.AverageQty, 0)) ASC, p.Name
+                    LIMIT @limit";
 
                 using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@salesStartDate", salesStartDate);
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
                 using var reader = await command.ExecuteReaderAsync();
 
                 while (await reader.ReadAsync())
                 {
-                    products.Add(new Product
+                    products.Add(new SlowMovingProductInsight
                     {
-                        Id = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
-                        Name = reader.IsDBNull(1) ? null : reader.GetValue(1).ToString(),
-                        Sku = reader.IsDBNull(2) ? null : reader.GetValue(2).ToString(),
+                        ProductId = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        ProductName = reader.IsDBNull(1) ? null : reader.GetValue(1).ToString(),
+                        Unit = reader.IsDBNull(2) ? null : reader.GetValue(2).ToString(),
                         Category = reader.IsDBNull(3) ? null : reader.GetValue(3).ToString(),
-                        Unit = reader.IsDBNull(4) ? null : reader.GetValue(4).ToString(),
-                        Stock = SafeConvertToDecimal(reader, 5),
-                        PurchasePrice = SafeConvertToDecimal(reader, 6),
-                        SellingPrice = SafeConvertToDecimal(reader, 7),
-                        IsActive = reader.IsDBNull(8) || Convert.ToBoolean(reader.GetValue(8))
+                        CurrentStock = SafeConvertToDecimal(reader, 4) ?? 0,
+                        QuantitySold = SafeConvertToDecimal(reader, 5) ?? 0,
+                        AverageCategoryQuantity = SafeConvertToDecimal(reader, 6) ?? 0,
+                        LastSaleDate = SafeConvertToDateTime(reader, 7)
                     });
                 }
             }
@@ -2365,6 +2675,167 @@ namespace SmartSembakoAssistant.Services
             }
 
             return products;
+        }
+
+        public async Task<List<SlowMovingProductInsight>> GetSleepingMandatoryProductsAsync(int days = 30, int limit = 50)
+        {
+            var products = new List<SlowMovingProductInsight>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? productTable = FindTable(tables, new[] { "Product", "products" });
+                string? stockTable = FindTable(tables, new[] { "Stock", "stock" });
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+
+                if (string.IsNullOrEmpty(productTable) ||
+                    string.IsNullOrEmpty(stockTable) ||
+                    string.IsNullOrEmpty(documentTable) ||
+                    string.IsNullOrEmpty(documentItemTable))
+                {
+                    return products;
+                }
+
+                string sql = $@"
+                    WITH sold AS (
+                        SELECT di.ProductId, SUM(di.Quantity) as QtySold, MAX(d.Date) as LastSaleDate
+                        FROM {ValidateTableName(documentItemTable)} di
+                        INNER JOIN {ValidateTableName(documentTable)} d ON d.Id = di.DocumentId
+                        WHERE d.DocumentTypeId = 2
+                          AND date(d.Date) >= @salesStartDate
+                        GROUP BY di.ProductId
+                    )
+                    SELECT
+                        p.Id,
+                        p.Name,
+                        {GetProductUnitSql("p")} as Unit,
+                        pg.Name as Category,
+                        COALESCE(s.Quantity, 0) as CurrentStock,
+                        COALESCE(sold.QtySold, 0) as QtySold,
+                        sold.LastSaleDate
+                    FROM {ValidateTableName(productTable)} p
+                    LEFT JOIN {ValidateTableName(stockTable)} s
+                        ON p.Id = s.ProductId
+                       AND s.WarehouseId = {PreferredWarehouseIdSql}
+                    LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
+                    LEFT JOIN sold ON sold.ProductId = p.Id
+                    WHERE p.IsEnabled = 1
+                      AND COALESCE(pg.Name, '') IN ('Obat','Obat Nyamuk','Obat Obatan','Sembako','Perlengkapan Bayi','Makanan Bayi')
+                      AND (
+                            COALESCE(sold.QtySold, 0) <= 3
+                         OR sold.LastSaleDate IS NULL
+                         OR julianday('now') - julianday(sold.LastSaleDate) > 21
+                      )
+                    ORDER BY COALESCE(sold.QtySold, 0) ASC, pg.Name, p.Name
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@salesStartDate", DateTime.Today.AddDays(-Math.Max(1, days)).ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+                using var reader = await command.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    products.Add(new SlowMovingProductInsight
+                    {
+                        ProductId = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        ProductName = reader.IsDBNull(1) ? null : reader.GetValue(1).ToString(),
+                        Unit = reader.IsDBNull(2) ? null : reader.GetValue(2).ToString(),
+                        Category = reader.IsDBNull(3) ? null : reader.GetValue(3).ToString(),
+                        CurrentStock = SafeConvertToDecimal(reader, 4) ?? 0,
+                        QuantitySold = SafeConvertToDecimal(reader, 5) ?? 0,
+                        LastSaleDate = SafeConvertToDateTime(reader, 6)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading sleeping mandatory products: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return products;
+        }
+
+        public async Task<decimal> GetProductSoldQuantityAsync(string productId, int days = 30)
+        {
+            if (string.IsNullOrWhiteSpace(productId))
+            {
+                return 0;
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                {
+                    return 0;
+                }
+
+                string sql = $@"
+                    SELECT COALESCE(SUM(di.Quantity), 0)
+                    FROM {ValidateTableName(documentItemTable)} di
+                    INNER JOIN {ValidateTableName(documentTable)} d ON d.Id = di.DocumentId
+                    WHERE d.DocumentTypeId = 2
+                      AND di.ProductId = @productId
+                      AND date(d.Date) >= @startDate";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@productId", productId.Trim());
+                command.Parameters.AddWithValue("@startDate", DateTime.Today.AddDays(-Math.Max(1, days)).ToString("yyyy-MM-dd"));
+                var result = await command.ExecuteScalarAsync();
+                return Convert.ToDecimal(result ?? 0);
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading product sold quantity: {ex.Message}", "Database", ex.ToString());
+                }
+                return 0;
+            }
+        }
+
+        public async Task<List<Product>> GetLargeUnitProductsAsync(int limit = 200)
+        {
+            var products = await GetAllProductsAsync();
+            return products
+                .Where(product => product.IsActive && (product.Stock ?? 0) != 0)
+                .Where(product => IsLargeUnit(product.Unit) || IsLargeUnit(product.Name))
+                .OrderByDescending(product => product.Stock ?? 0)
+                .ThenBy(product => product.Name)
+                .Take(Math.Max(1, limit))
+                .ToList();
+        }
+
+        private static bool IsLargeUnit(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            string normalized = value.ToLowerInvariant();
+            return normalized.Contains("dus") ||
+                   normalized.Contains("dos") ||
+                   normalized.Contains("pak") ||
+                   normalized.Contains("krat") ||
+                   normalized.Contains("@dus") ||
+                   normalized.Contains("@pak") ||
+                   normalized.Contains("@krat");
         }
 
         /// <summary>
@@ -2530,10 +3001,96 @@ namespace SmartSembakoAssistant.Services
             return rows;
         }
 
+        public async Task<List<Product>> GetProductCategoryGroupAsync(string keyword, int limit = 20, bool categoryOnly = false)
+        {
+            string normalized = (keyword ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return new List<Product>();
+            }
+
+            string[] exactCategories = normalized switch
+            {
+                var value when value.Contains("rokok") => new[] { "Rokok" },
+                var value when value.Contains("minuman") || value.Contains("minum") => new[] { "Minuman", "Minuman Seduh" },
+                var value when value.Contains("mie") || value.Contains("mi instan") => new[] { "Mie Instant" },
+                var value when value.Contains("obat") => new[] { "Obat", "Obat Nyamuk", "Obat Obatan" },
+                var value when value.Contains("sembako") => new[] { "Sembako" },
+                var value when value.Contains("kopi") => new[] { "Kopi" },
+                var value when value.Contains("bayi") => new[] { "Makanan Bayi", "Perlengkapan Bayi" },
+                var value when value.Contains("permen") => new[] { "Permen" },
+                var value when value.Contains("eskrim") || value.Contains("es krim") => new[] { "Eskrim" },
+                _ => Array.Empty<string>()
+            };
+
+            string[] categoryLikeKeywords = normalized switch
+            {
+                var value when value.Contains("bumbu") => new[] { "bumbu" },
+                var value when value.Contains("shampo") || value.Contains("sampo") => new[] { "shampo", "sampo" },
+                _ => Array.Empty<string>()
+            };
+
+            string[] categoryKeywords = normalized switch
+            {
+                var value when value.Contains("bumbu") || value.Contains("rempah") || value.Contains("perbumbuan") => new[]
+                {
+                    "garam", "gula", "merica", "lada", "ketumbar", "kunyit", "jahe", "lengkuas",
+                    "bawang", "cabe", "cabai", "sasa", "royco", "masako", "racik", "desaku",
+                    "kecap", "saus", "sambal", "terasi", "penyedap", "bumbu", "rempah"
+                },
+                var value when value.Contains("sembako") => new[]
+                {
+                    "beras", "minyak", "gula", "tepung", "terigu", "telur", "garam", "mie",
+                    "santan", "kopi", "teh", "susu", "kecap", "saus", "bihun", "soun"
+                },
+                var value when value.Contains("minum") || value.Contains("drink") => new[]
+                {
+                    "aqua", "air", "teh", "kopi", "susu", "fruit tea", "teh gelas", "rio",
+                    "ale-ale", "floridina", "sprite", "fanta", "coca", "yakult"
+                },
+                var value when value.Contains("rokok") || value.Contains("kretek") => new[]
+                {
+                    "rokok", "kretek", "filter", "mustang", "jarum", "djarum", "sampoerna",
+                    "surya", "gudang garam", "esse", "marlboro", "scorpion", "jc"
+                },
+                _ => new[] { normalized }
+            };
+
+            var products = await GetAllProductsAsync();
+            return products
+                .Where(product => product.IsActive && !string.IsNullOrWhiteSpace(product.Name))
+                .Where(product =>
+                {
+                    string name = product.Name!.ToLowerInvariant();
+                    string category = product.Category?.ToLowerInvariant() ?? string.Empty;
+                    bool exactCategoryMatch = exactCategories.Any(expected =>
+                        string.Equals(product.Category, expected, StringComparison.OrdinalIgnoreCase));
+                    bool categoryLikeMatch = categoryLikeKeywords.Any(key => category.Contains(key));
+                    if (categoryOnly)
+                    {
+                        return exactCategoryMatch ||
+                               categoryLikeMatch ||
+                               category.Contains(normalized, StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    return exactCategoryMatch ||
+                           categoryLikeMatch ||
+                           categoryKeywords.Any(key => name.Contains(key) || category.Contains(key));
+                })
+                .OrderBy(product => product.Name)
+                .Take(Math.Max(1, limit))
+                .ToList();
+        }
+
         /// <summary>
         /// Mendapatkan laporan penjualan per User/Kasir hari ini
         /// </summary>
         public async Task<List<SalesReportItem>> GetSalesPerUserAsync()
+        {
+            return await GetSalesPerUserAsync(DateTime.Today, DateTime.Today);
+        }
+
+        public async Task<List<SalesReportItem>> GetSalesPerUserAsync(DateTime startDate, DateTime endDate)
         {
             var reports = new List<SalesReportItem>();
 
@@ -2556,11 +3113,15 @@ namespace SmartSembakoAssistant.Services
                         COALESCE(SUM(d.Total), 0) as TotalSales
                     FROM {ValidateTableName(documentTable)} d
                     INNER JOIN {ValidateTableName(userTable)} u ON d.UserId = u.Id
-                    WHERE date(d.Date) = date('now', 'localtime')
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) >= @startDate
+                      AND date(d.Date) <= @endDate
                     GROUP BY u.Id
                     ORDER BY TotalSales DESC";
 
                 using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", startDate.Date.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", endDate.Date.ToString("yyyy-MM-dd"));
                 using var reader = await command.ExecuteReaderAsync();
 
                 while (await reader.ReadAsync())
@@ -2589,6 +3150,103 @@ namespace SmartSembakoAssistant.Services
             return reports;
         }
 
+        public async Task<(DateTime? LastSaleDate, decimal Omzet, int TransactionCount)> GetLastSalesSummaryBeforeAsync(DateTime beforeDate)
+        {
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return (null, 0, 0);
+                }
+
+                string lastDateSql = $@"
+                    SELECT MAX(date(d.Date))
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) < @beforeDate";
+                using var lastDateCommand = new SqliteCommand(lastDateSql, connection);
+                lastDateCommand.Parameters.AddWithValue("@beforeDate", beforeDate.Date.ToString("yyyy-MM-dd"));
+                object? lastDateValue = await lastDateCommand.ExecuteScalarAsync();
+                if (lastDateValue == null || lastDateValue == DBNull.Value ||
+                    !DateTime.TryParse(lastDateValue.ToString(), out var lastDate))
+                {
+                    return (null, 0, 0);
+                }
+
+                string summarySql = $@"
+                    SELECT COUNT(d.Id), COALESCE(SUM(d.Total), 0)
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) = @lastDate";
+                using var summaryCommand = new SqliteCommand(summarySql, connection);
+                summaryCommand.Parameters.AddWithValue("@lastDate", lastDate.Date.ToString("yyyy-MM-dd"));
+                using var reader = await summaryCommand.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    int count = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0));
+                    decimal omzet = SafeConvertToDecimal(reader, 1) ?? 0;
+                    return (lastDate.Date, omzet, count);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading last sales summary: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return (null, 0, 0);
+        }
+
+        public async Task<(int Count, decimal Total)> GetDocumentActivitySummaryAsync(DateTime date, int documentTypeId)
+        {
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return (0, 0);
+                }
+
+                string sql = $@"
+                    SELECT COUNT(d.Id), COALESCE(SUM(d.Total), 0)
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId = @documentTypeId
+                      AND date(d.Date) = @date";
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@documentTypeId", documentTypeId);
+                command.Parameters.AddWithValue("@date", date.Date.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    return (
+                        reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0)),
+                        SafeConvertToDecimal(reader, 1) ?? 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading document activity summary: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return (0, 0);
+        }
+
         /// <summary>
         /// Mendapatkan Dead Stock (Tidak laku > 14 hari)
         /// </summary>
@@ -2607,12 +3265,31 @@ namespace SmartSembakoAssistant.Services
                 string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
                 string? stockTable = FindTable(tables, new[] { "Stock", "stock" });
 
-                if (string.IsNullOrEmpty(productTable) || string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                if (string.IsNullOrEmpty(productTable) ||
+                    string.IsNullOrEmpty(documentTable) ||
+                    string.IsNullOrEmpty(documentItemTable) ||
+                    string.IsNullOrEmpty(stockTable))
+                {
                     return products;
+                }
 
                 string sql = $@"
-                    SELECT 
-                        p.Id, p.Name, p.Code, pg.Name as Category, p.MeasurementUnit,
+                    WITH sales AS (
+                        SELECT di.ProductId, MAX(d.Date) as LastSale
+                        FROM {ValidateTableName(documentItemTable)} di
+                        INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
+                        WHERE d.DocumentTypeId = 2
+                        GROUP BY di.ProductId
+                    ),
+                    restock AS (
+                        SELECT di.ProductId, MAX(d.Date) as LastRestock
+                        FROM {ValidateTableName(documentItemTable)} di
+                        INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
+                        WHERE d.DocumentTypeId = 1
+                        GROUP BY di.ProductId
+                    )
+                    SELECT
+                        p.Id, p.Name, p.Code, pg.Name as Category, {GetProductUnitSql("p")} as Unit,
                         COALESCE(s.Quantity, 0) as Stock,
                         p.Cost, p.Price,
                         p.IsEnabled
@@ -2621,15 +3298,15 @@ namespace SmartSembakoAssistant.Services
                         ON p.Id = s.ProductId
                        AND s.WarehouseId = {PreferredWarehouseIdSql}
                     LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
+                    LEFT JOIN sales ON sales.ProductId = p.Id
+                    LEFT JOIN restock ON restock.ProductId = p.Id
                     WHERE p.IsEnabled = 1
-                    AND p.Id NOT IN (
-                        SELECT DISTINCT di.ProductId 
-                        FROM {ValidateTableName(documentItemTable)} di
-                        INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
-                        WHERE date(d.Date) >= date('now', '-14 days', 'localtime')
-                    )
-                    ORDER BY p.Name
-                    LIMIT 20";
+                      AND COALESCE(s.Quantity, 0) > 0
+                      AND COALESCE(pg.Name, '') NOT IN ('Obat','Obat Nyamuk','Obat Obatan','Sembako','Perlengkapan Bayi','Makanan Bayi')
+                      AND (sales.LastSale IS NULL OR julianday('now') - julianday(sales.LastSale) > 21)
+                      AND (restock.LastRestock IS NULL OR julianday('now') - julianday(restock.LastRestock) > 14)
+                    ORDER BY COALESCE(s.Quantity, 0) DESC, p.Name
+                    LIMIT 100";
 
                 using var command = new SqliteCommand(sql, connection);
                 using var reader = await command.ExecuteReaderAsync();
@@ -4311,6 +4988,359 @@ namespace SmartSembakoAssistant.Services
             }
 
             return 0;
+        }
+
+        public async Task<List<PaymentBreakdownItem>> GetPaymentBreakdownAsync(DateTime date)
+        {
+            var items = new List<PaymentBreakdownItem>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? paymentTable = FindTable(tables, new[] { "Payment", "payments" });
+                string? paymentTypeTable = FindTable(tables, new[] { "PaymentType", "payment_types" });
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(paymentTable) || string.IsNullOrEmpty(paymentTypeTable) || string.IsNullOrEmpty(documentTable))
+                {
+                    return items;
+                }
+
+                string sql = $@"
+                    SELECT COALESCE(pt.Name, 'Tanpa nama') as PaymentTypeName,
+                           SUM(p.Amount) as Amount,
+                           COUNT(DISTINCT p.DocumentId) as TransactionCount
+                    FROM {ValidateTableName(paymentTable)} p
+                    INNER JOIN {ValidateTableName(paymentTypeTable)} pt ON pt.Id = p.PaymentTypeId
+                    INNER JOIN {ValidateTableName(documentTable)} d ON d.Id = p.DocumentId
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) = @date
+                      AND COALESCE(pt.Name, '') != 'Kembalian'
+                    GROUP BY pt.Id, pt.Name
+                    HAVING SUM(p.Amount) != 0
+                    ORDER BY SUM(p.Amount) DESC";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    items.Add(new PaymentBreakdownItem
+                    {
+                        PaymentTypeName = reader.IsDBNull(0) ? "Tanpa nama" : reader.GetString(0),
+                        Amount = SafeConvertToDecimal(reader, 1) ?? 0,
+                        TransactionCount = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2))
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading payment breakdown: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return items;
+        }
+
+        public async Task<List<ZReportSummary>> GetZReportsAsync(DateTime date)
+        {
+            var items = new List<ZReportSummary>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? zReportTable = FindTable(tables, new[] { "ZReport", "z_reports" });
+                string? paymentTable = FindTable(tables, new[] { "Payment", "payments" });
+                if (string.IsNullOrEmpty(zReportTable) || string.IsNullOrEmpty(paymentTable))
+                {
+                    return items;
+                }
+
+                string sql = $@"
+                    SELECT z.Number, COALESCE(SUM(pay.Amount), 0) as Amount
+                    FROM {ValidateTableName(zReportTable)} z
+                    LEFT JOIN {ValidateTableName(paymentTable)} pay ON pay.ZReportId = z.Id
+                    WHERE date(z.DateCreated) = @date
+                    GROUP BY z.Id, z.Number
+                    ORDER BY z.Id DESC";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    items.Add(new ZReportSummary
+                    {
+                        Number = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        Amount = SafeConvertToDecimal(reader, 1) ?? 0
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading ZReport summary: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return items;
+        }
+
+        public async Task<decimal> GetNoCostRevenuePercentAsync(DateTime startDate, DateTime endDate)
+        {
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                {
+                    return 0;
+                }
+
+                string sql = $@"
+                    SELECT
+                        COALESCE(SUM(di.Total), 0) as Revenue,
+                        COALESCE(SUM(CASE WHEN COALESCE(di.ProductCost, 0) <= 0 THEN di.Total ELSE 0 END), 0) as NoCostRevenue
+                    FROM {ValidateTableName(documentItemTable)} di
+                    INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) >= @startDate
+                      AND date(d.Date) <= @endDate";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", startDate.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", endDate.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    decimal revenue = SafeConvertToDecimal(reader, 0) ?? 0;
+                    decimal noCostRevenue = SafeConvertToDecimal(reader, 1) ?? 0;
+                    return revenue > 0 ? noCostRevenue / revenue * 100 : 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error calculating no-cost revenue percent: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return 0;
+        }
+
+        public async Task<ProfitCalculationSummary> GetProfitCalculationExplanationAsync(DateTime? startDate = null, DateTime? endDate = null)
+        {
+            DateTime start = startDate?.Date ?? DateTime.Today;
+            DateTime end = endDate?.Date ?? DateTime.Today;
+            var summary = new ProfitCalculationSummary
+            {
+                StartDate = start,
+                EndDate = end
+            };
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                {
+                    return summary;
+                }
+
+                string sql = $@"
+                    SELECT
+                        COUNT(DISTINCT d.Id) as TransactionCount,
+                        COALESCE(SUM(di.Total), 0) as Revenue,
+                        COALESCE(SUM(di.ProductCost * di.Quantity), 0) as CostOfGoodsSold,
+                        COALESCE(SUM((di.Price - di.ProductCost) * di.Quantity), 0) as GrossProfit
+                    FROM {ValidateTableName(documentTable)} d
+                    INNER JOIN {ValidateTableName(documentItemTable)} di ON d.Id = di.DocumentId
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) >= @startDate
+                      AND date(d.Date) <= @endDate";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", start.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", end.ToString("yyyy-MM-dd"));
+
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    summary.TransactionCount = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0));
+                    summary.Revenue = SafeConvertToDecimal(reader, 1) ?? 0;
+                    summary.CostOfGoodsSold = SafeConvertToDecimal(reader, 2) ?? 0;
+                    summary.GrossProfit = SafeConvertToDecimal(reader, 3) ?? 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error calculating profit explanation: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return summary;
+        }
+
+        public async Task<List<SupplierPurchaseSummary>> GetSupplierPurchaseSummaryAsync(int limit = 10)
+        {
+            var summaries = new List<SupplierPurchaseSummary>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? customerTable = FindTable(tables, new[] { "Customer", "customers", "pelanggan" });
+
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(customerTable))
+                {
+                    return summaries;
+                }
+
+                string sql = $@"
+                    SELECT
+                        c.Id,
+                        COALESCE(c.Name, 'Supplier tanpa nama') as SupplierName,
+                        COUNT(d.Id) as PurchaseCount,
+                        COALESCE(SUM(d.Total), 0) as TotalPurchase,
+                        MAX(d.Date) as LastPurchaseDate
+                    FROM {ValidateTableName(documentTable)} d
+                    LEFT JOIN {ValidateTableName(customerTable)} c ON d.CustomerId = c.Id
+                    WHERE d.DocumentTypeId = 1
+                      AND (c.IsSupplier = 1 OR c.IsSupplier IS NULL)
+                    GROUP BY c.Id, c.Name
+                    HAVING PurchaseCount > 0
+                    ORDER BY TotalPurchase DESC, PurchaseCount DESC
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+                using var reader = await command.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    summaries.Add(new SupplierPurchaseSummary
+                    {
+                        SupplierId = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
+                        SupplierName = reader.IsDBNull(1) ? "Supplier tanpa nama" : reader.GetString(1),
+                        PurchaseCount = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2)),
+                        TotalPurchase = SafeConvertToDecimal(reader, 3) ?? 0,
+                        LastPurchaseDate = SafeConvertToDateTime(reader, 4)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading supplier purchase summary: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return summaries;
+        }
+
+        public async Task<List<DailySalesData>> GetDailyTrendAsync(int days = 7)
+        {
+            var trend = new List<DailySalesData>();
+            int safeDays = Math.Clamp(days, 1, 90);
+            DateTime start = DateTime.Today.AddDays(-(safeDays - 1));
+
+            for (int i = 0; i < safeDays; i++)
+            {
+                var date = start.AddDays(i);
+                trend.Add(new DailySalesData
+                {
+                    Date = date,
+                    DateLabel = date.ToString("dd/MM"),
+                    TransactionCount = 0,
+                    Revenue = 0
+                });
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return trend;
+                }
+
+                string sql = $@"
+                    SELECT
+                        date(Date) as SaleDate,
+                        COUNT(Id) as TransactionCount,
+                        COALESCE(SUM(Total), 0) as Revenue
+                    FROM {ValidateTableName(documentTable)}
+                    WHERE DocumentTypeId = 2
+                      AND date(Date) >= @startDate
+                      AND date(Date) <= @endDate
+                    GROUP BY date(Date)
+                    ORDER BY SaleDate";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", start.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", DateTime.Today.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    if (!DateTime.TryParse(reader.GetString(0), out var date))
+                    {
+                        continue;
+                    }
+
+                    var item = trend.FirstOrDefault(entry => entry.Date.Date == date.Date);
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    item.TransactionCount = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1));
+                    item.Revenue = SafeConvertToDecimal(reader, 2) ?? 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading daily trend: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return trend;
         }
 
         /// <summary>

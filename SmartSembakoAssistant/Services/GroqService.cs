@@ -727,11 +727,19 @@ ATURAN:
             string? userRole = null,
             string? realStoreData = null)
         {
-            string contextInfo = conversationHistory.Any()
-                ? "RIWAYAT PERCAKAPAN TERBARU:\n" + string.Join("\n", conversationHistory)
+            var compactHistory = conversationHistory
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => TrimPromptSection(item, 260))
+                .TakeLast(4)
+                .ToList();
+
+            string contextInfo = compactHistory.Any()
+                ? "RIWAYAT TERBARU:\n" + string.Join("\n", compactHistory)
                 : "";
 
-            string storeDataInfo = realStoreData ?? "\n\nData toko belum tersedia. Jangan mengarang data.";
+            string storeDataInfo = TrimPromptSection(
+                realStoreData ?? "Data toko tidak tersedia. Jangan mengarang data.",
+                4500);
 
             string userPrompt = $@"{contextInfo}
 
@@ -742,7 +750,8 @@ PERTANYAAN USER: {userMessage}
 PENTING:
 - Gunakan HANYA data toko yang ada di atas.
 - Jika pertanyaan pendek seperti 'gimana caranya?', 'yang tadi', atau 'itu berapa?', pakai riwayat percakapan terbaru untuk memahami rujukannya.
-- JANGAN mengarang angka, identitas, transaksi, atau fakta apa pun.";
+- JANGAN mengarang angka, identitas, transaksi, atau fakta apa pun.
+- Jika data memang tidak tersedia, jawab jujur dan sarankan command/query relevan seperti /dokumen, /riwayat_restock, /stok, /laporan, /pelanggan, /supplier, atau /piutang.";
 
             string responsePolicy = $@"ATURAN TAMBAHAN PRIORITAS TINGGI:
 1. Nada ringkas dan profesional.
@@ -811,8 +820,77 @@ CONTOH JAWABAN YANG BENAR:
 
 {(userRole == "Owner" ? "- Fokus insight bisnis, profit, & strategi" : "- Fokus stok & transaksi")}";
 
-            string rawResponse = await SendPromptAsync(responsePolicy + "\n\n" + systemPrompt, userPrompt, 0.7, 800);
+            string compactSystemPrompt = $@"Anda adalah Smart Sembako Assistant (SSA), asisten operasional toko sembako.
+Peran lawan bicara: {userRole ?? "Guest"}.
+Database yang tersedia:
+- pos.db Aronium POS: produk, stok, transaksi, dokumen, pelanggan, supplier, kasir.
+- memory.db: riwayat chat dan log bot.
+Kemampuan utama:
+- Baca stok produk, laporan penjualan, dokumen restock/penjualan, pelanggan, supplier, piutang, kasir.
+- Analisa produk terlaris, slow moving, dead stock, rekomendasi restock, profit margin.
+Batas data:
+- Tanggal expired tidak selalu tersedia sebagai data produk terstruktur; bila tidak ada, sarankan cek dokumen pembelian/restock terakhir.
+- Kategori produk tidak selalu terstruktur; gunakan keyword matching dari nama/kategori produk.
+- Foto/gambar produk tidak tersedia dari database.
+Aturan:
+1. Jawab singkat, langsung, bahasa Indonesia natural.
+2. Gunakan hanya data toko yang diberikan di pesan user. Jangan mengarang angka, transaksi, stok, harga, pelanggan, atau supplier.
+3. Stok minus harus disebut minus, bukan nol.
+4. Kasir tidak boleh menerima profit, harga modal, atau data owner-only; jawab 'Data ini hanya untuk owner.'
+5. Jika user meminta data lengkap/panjang, sarankan export CSV/ZIP bila tersedia.
+6. Jangan pakai tabel markdown dengan karakter |; gunakan bullet teks.
+7. Bedakan jelas: slow moving = stok masih ada dan volume jual rendah; dead stock = tidak terjual >14 hari; stok minus = oversold/perlu koreksi/restock.
+
+=== DEFINISI STOK (WAJIB DIPAKAI) ===
+
+SLOW MOVING (Layer A):
+Masih terjual tapi < 40% rata-rata kategorinya per 30 hari.
+Stok bisa + atau -. Jika stok minus: label ""stok perlu koreksi data"".
+Command: /slow_moving
+
+DEAD STOCK (Layer B):
+Stok > 0, tidak terjual > 21 hari, bukan baru restock (< 14 hari),
+bukan kategori mandatory, bukan unit besar dengan unit turunan yang laku.
+Command: /dead_stock
+
+SLEEPING MANDATORY (Layer C):
+Sold30d <= 3 ATAU tidak terjual > 21 hari, tapi kategori wajib ada
+(Obat, Obat Nyamuk, Sembako, Perlengkapan Bayi, Makanan Bayi).
+JANGAN sarankan hapus atau retur. Saran: pertahankan, cek expired.
+Command: /sleeping_stock
+
+OVERSOLD / STOK MINUS:
+Stok negatif = produk SANGAT LAKU atau data perlu opname.
+JANGAN label sebagai tidak laku atau dead stock.
+Contoh: Roti@2000 stok=-7668 -> terlaris, bukan dead stock.
+
+SHADOW STOCK:
+Sebelum label dead stock pada produk Dus/Pak/Krat:
+-> Cek unit turunan. Jika masih laku: ""unit besar lambat, keluarga bergerak""
+-> Jika mapping belum ada: beri peringatan, jangan simpulkan langsung.
+
+PRODUK BARU:
+Baru restock < 14 hari -> BUKAN dead stock.
+
+PROFIT:
+Margin > 40% kemungkinan karena banyak produk tidak ada Cost.
+Selalu sertakan catatan ""X% omzet tidak ada data modal"" pada laporan profit bila datanya tersedia.
+
+DATA EXPIRED:
+Jika produk tidak punya data expired, jawab ""tidak ada data expired untuk produk ini di sistem.""";
+
+            string rawResponse = await SendPromptAsync(compactSystemPrompt, userPrompt, 0.4, 700);
             return SanitizeAssistantResponse(rawResponse);
+        }
+
+        private static string TrimPromptSection(string value, int maxChars)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length <= maxChars)
+            {
+                return value ?? string.Empty;
+            }
+
+            return value[..maxChars].TrimEnd() + "\n...data dipotong; minta export jika perlu daftar lengkap.";
         }
 
         private static string SanitizeAssistantResponse(string response)

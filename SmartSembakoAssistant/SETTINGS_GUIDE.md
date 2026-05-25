@@ -490,4 +490,4 @@ dotnet run --project SmartSembakoAssistant\SmartSembakoAssistant.csproj
 - [README.md](README.md)
 - [QUICK_START.md](QUICK_START.md)
 - [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md)
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
+- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)

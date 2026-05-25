@@ -77,6 +77,93 @@ if (Test-Path $CHANGELOG) {
     Write-WARN "changelog.json tidak ditemukan."
 }
 
+function Get-ProjectVersion {
+    $projectFile = Join-Path $ROOT "SmartSembakoAssistant\SmartSembakoAssistant.csproj"
+    if (!(Test-Path -LiteralPath $projectFile)) {
+        return $null
+    }
+
+    try {
+        [xml]$projectXml = Get-Content -LiteralPath $projectFile -Raw -Encoding UTF8
+        return $projectXml.Project.PropertyGroup.Version | Select-Object -First 1
+    }
+    catch {
+        Write-WARN "Gagal membaca versi project: $_"
+        return $null
+    }
+}
+
+function Test-AllowedExecutablePath {
+    param([string]$Path)
+
+    $normalized = $Path.Replace('\', '/')
+    return $normalized -like "SmartSembakoAssistant/runtimes/*" -or
+           $normalized -like "SmartSembakoAssistant/vendor/*" -or
+           $normalized -like "SmartSembakoAssistant/deployment/*"
+}
+
+function Invoke-SafetyGuard {
+    param([string[]]$StatusLines)
+
+    $blocked = New-Object System.Collections.Generic.List[string]
+
+    foreach ($line in $StatusLines) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.Length -lt 4) {
+            continue
+        }
+
+        $status = $line.Substring(0, 2)
+        $filePath = $line.Substring(3).Trim().Trim('"')
+        $normalized = $filePath.Replace('\', '/')
+
+        # Deleting a previously tracked sensitive file is allowed so the repo can be cleaned.
+        $isDeleteOnly = $status.Trim() -eq "D"
+        if ($isDeleteOnly) {
+            continue
+        }
+
+        if ($normalized -match "(^|/)config\.json$" -or
+            $normalized -match "(^|/)\.env($|[./])" -or
+            $normalized -match "(^|/)data/.*\.db$" -or
+            $normalized -match "(^|/)data/baileys-session" -or
+            $normalized -match "(?i)(credentials|service-account).*\.json$" -or
+            $normalized -match "(?i)automation-sheets-.*\.json$" -or
+            $normalized -match "(?i)-b2b070766971\.json$") {
+            $blocked.Add($filePath) | Out-Null
+            continue
+        }
+
+        if ([IO.Path]::GetFileName($normalized) -ieq "cloudflared.exe" -and
+            $normalized -notlike "SmartSembakoAssistant/runtimes/cloudflared/*" -and
+            $normalized -notlike "SmartSembakoAssistant/vendor/cloudflared/*") {
+            $blocked.Add($filePath) | Out-Null
+            continue
+        }
+
+        if ([IO.Path]::GetExtension($normalized) -ieq ".exe" -and !(Test-AllowedExecutablePath -Path $normalized)) {
+            $blocked.Add($filePath) | Out-Null
+        }
+    }
+
+    if ($blocked.Count -gt 0) {
+        Write-ERR "Commit dibatalkan. File sensitif/biner terlarang terdeteksi sebelum git add:"
+        foreach ($path in ($blocked | Sort-Object -Unique)) {
+            Write-Color "    - $path" Red
+        }
+        Write-WARN "Bersihkan file tersebut atau pastikan masuk .gitignore sebelum menjalankan auto-commit lagi."
+        exit 1
+    }
+
+    $projectVersion = Get-ProjectVersion
+    if ($projectVersion) {
+        $cleanChangelogVersion = $VERSION.TrimStart("v", "V")
+        if ($cleanChangelogVersion -ne "unknown" -and $projectVersion -ne $cleanChangelogVersion) {
+            Write-WARN "Versi changelog.json ($cleanChangelogVersion) belum selaras dengan SmartSembakoAssistant.csproj ($projectVersion)."
+            Write-WARN "Jalankan: powershell -ExecutionPolicy Bypass -File .\SmartSembakoAssistant\scripts\Sync-Version.ps1"
+        }
+    }
+}
+
 # -- Cek status git ---------------------------------------------
 Write-STEP "Mengecek perubahan file..."
 $gitStatus    = git status --porcelain 2>&1
@@ -94,6 +181,7 @@ if ($PushOnly) {
     exit 0
 } else {
     Write-INFO "Ditemukan $($changedFiles.Count) file berubah:"
+    Invoke-SafetyGuard -StatusLines $changedFiles
 
     # -- Klasifikasikan per ekstensi ----------------------------
     $mdFiles    = @()

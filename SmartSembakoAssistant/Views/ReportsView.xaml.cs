@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using SmartSembakoAssistant.Controls;
+using SmartSembakoAssistant.Helpers;
 using SmartSembakoAssistant.Models;
 using SmartSembakoAssistant.Services;
 
@@ -28,18 +29,22 @@ namespace SmartSembakoAssistant.Views
     {
         private readonly LoggingService _loggingService;
         private readonly PosDbService? _posDbService;
+        private readonly ExportService _exportService;
 
         private ObservableCollection<ReportRow> _reportRows = new();
         private List<ReportRow> _allReportRows = new();
+        private List<SalesLineItem> _allSalesLineItems = new();
 
         public ReportsView(
             LoggingService loggingService,
-            PosDbService? posDbService)
+            PosDbService? posDbService,
+            ExportService exportService)
         {
             InitializeComponent();
 
             _loggingService = loggingService;
             _posDbService = posDbService;
+            _exportService = exportService;
 
             DgReports.ItemsSource = _reportRows;
 
@@ -89,8 +94,12 @@ namespace SmartSembakoAssistant.Views
                 // Calculate total items sold from line items
                 int totalItemsSold = (int)lineItems.Sum(li => li.Quantity);
 
+                _allSalesLineItems = lineItems
+                    .OrderByDescending(item => item.Date)
+                    .ToList();
+
                 // Convert line items to report rows
-                _allReportRows = lineItems.Select(li => new ReportRow
+                _allReportRows = _allSalesLineItems.Select(li => new ReportRow
                 {
                     Date = li.Date,
                     Invoice = li.Invoice ?? "-",
@@ -100,9 +109,6 @@ namespace SmartSembakoAssistant.Views
                     Total = li.Total,
                     Profit = li.Profit
                 }).ToList();
-
-                // Sort by date descending
-                _allReportRows.Sort((a, b) => b.Date.CompareTo(a.Date));
 
                 _reportRows.Clear();
                 foreach (var row in _allReportRows)
@@ -156,52 +162,35 @@ namespace SmartSembakoAssistant.Views
             await LoadReportsData();
         }
 
-        private void BtnExportCSV_Click(object sender, RoutedEventArgs e)
+        private async void BtnExportCSV_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                if (_reportRows.Count == 0)
-                {
-                    ToastHelper.ShowInfo(
-                        "Info",
-                        "Tidak ada data untuk di-export.");
-                    return;
-                }
-
-                var saveDialog = new SaveFileDialog
-                {
-                    Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-                    DefaultExt = "csv",
-                    FileName = $"reports_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
-                };
-
-                if (saveDialog.ShowDialog() == true)
-                {
-                    ExportToCSV(saveDialog.FileName);
-
-                    ToastHelper.ShowSuccess(
-                        "Export CSV",
-                        $"Data exported successfully to {saveDialog.FileName}");
-                }
-            }
-            catch (Exception ex)
-            {
-                _loggingService.LogErrorAsync(
-                    $"Error exporting CSV: {ex.Message}",
-                    "Reports",
-                    ex.ToString());
-
-                ToastHelper.ShowError(
-                    "Export Failed",
-                    $"Unable to export CSV: {ex.Message}");
-            }
+            await ExportWithDialogAsync(
+                ExportFormat.Csv,
+                "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                "csv");
         }
 
-        private void BtnExportExcel_Click(object sender, RoutedEventArgs e)
+        private async void BtnExportExcel_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportWithDialogAsync(
+                ExportFormat.Excel,
+                "Excel files (*.xlsx)|*.xlsx|All files (*.*)|*.*",
+                "xlsx");
+        }
+
+        private async void BtnExportPDF_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportWithDialogAsync(
+                ExportFormat.Pdf,
+                "PDF files (*.pdf)|*.pdf|All files (*.*)|*.*",
+                "pdf");
+        }
+
+        private async Task ExportWithDialogAsync(ExportFormat format, string filter, string defaultExt)
         {
             try
             {
-                if (_reportRows.Count == 0)
+                if (_allSalesLineItems.Count == 0)
                 {
                     ToastHelper.ShowInfo(
                         "No Data",
@@ -212,64 +201,33 @@ namespace SmartSembakoAssistant.Views
 
                 var saveDialog = new SaveFileDialog
                 {
-                    Filter = "CSV files (*.csv)|*.csv|Excel files (*.xlsx)|*.xlsx|All files (*.*)|*.*",
-                    DefaultExt = "csv",
-                    FileName = $"reports_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
+                    Filter = filter,
+                    DefaultExt = defaultExt,
+                    FileName = $"reports_{DateTime.Now:yyyyMMdd_HHmmss}.{defaultExt}"
                 };
 
                 if (saveDialog.ShowDialog() == true)
                 {
-                    // Export as CSV (compatible with Excel)
-                    ExportToCSV(saveDialog.FileName);
+                    var result = await _exportService.ExportSalesAsync(
+                        _allSalesLineItems,
+                        saveDialog.FileName,
+                        format,
+                        GetExportPeriodLabel());
 
-                    ToastHelper.ShowSuccess(
-                        "Export Success",
-                        $"Data exported to CSV: {saveDialog.FileName}",
-                        Window.GetWindow(this));
-                }
-            }
-            catch (Exception ex)
-            {
-                _loggingService.LogErrorAsync(
-                    $"Error exporting CSV: {ex.Message}",
-                    "Reports",
-                    ex.ToString());
-
-                ToastHelper.ShowError(
-                    "Export Failed",
-                    $"Gagal export CSV: {ex.Message}",
-                    Window.GetWindow(this));
-            }
-        }
-
-        private void BtnExportPDF_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                if (_reportRows.Count == 0)
-                {
-                    ToastHelper.ShowInfo(
-                        "No Data",
-                        "Tidak ada data untuk di-export.",
-                        Window.GetWindow(this));
-                    return;
-                }
-
-                var saveDialog = new SaveFileDialog
-                {
-                    Filter = "Text files (*.txt)|*.txt|CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-                    DefaultExt = "txt",
-                    FileName = $"report_{DateTime.Now:yyyyMMdd_HHmmss}.txt"
-                };
-
-                if (saveDialog.ShowDialog() == true)
-                {
-                    ExportToTextFile(saveDialog.FileName);
-
-                    ToastHelper.ShowSuccess(
-                        "Export Success",
-                        $"Report exported to text file: {saveDialog.FileName}",
-                        Window.GetWindow(this));
+                    if (result.Success)
+                    {
+                        ToastHelper.ShowSuccess(
+                            "Export Success",
+                            $"{result.Message} {result.FilePath}",
+                            Window.GetWindow(this));
+                    }
+                    else
+                    {
+                        ToastHelper.ShowError(
+                            "Export Failed",
+                            result.Message,
+                            Window.GetWindow(this));
+                    }
                 }
             }
             catch (Exception ex)
@@ -286,101 +244,11 @@ namespace SmartSembakoAssistant.Views
             }
         }
 
-        private void ExportToCSV(string filePath)
+        private string GetExportPeriodLabel()
         {
-            // UTF-8 with BOM for Excel compatibility
-            var encoding = new UTF8Encoding(true);
-            var lines = new List<string>
-            {
-                "Tanggal,Invoice,Produk,Qty,Harga,Total,Profit"
-            };
-
-            foreach (var row in _allReportRows)
-            {
-                lines.Add($"{row.Date:dd/MM/yyyy}," +
-                          $"\"{EscapeCsvField(row.Invoice)}\"," +
-                          $"\"{EscapeCsvField(row.ProductName)}\"," +
-                          $"{row.Quantity}," +
-                          $"{row.Price}," +
-                          $"{row.Total}," +
-                          $"{row.Profit}");
-            }
-
-            File.WriteAllLines(filePath, lines, encoding);
-        }
-
-        private void ExportToTextFile(string filePath)
-        {
-            var lines = new List<string>
-            {
-                "==================================================",
-                "LAPORAN PENJUALAN - SMART SEMBAKO ASSISTANT",
-                "==================================================",
-                $"",
-                $"Tanggal Export: {DateTime.Now:dd/MM/yyyy HH:mm:ss}",
-                $"Total Transaksi: {_reportRows.Count}",
-                $"",
-                "--------------------------------------------------",
-                "DETAIL TRANSAKSI",
-                "--------------------------------------------------",
-                ""
-            };
-
-            foreach (var row in _reportRows)
-            {
-                lines.Add($"Tanggal   : {row.Date:dd/MM/yyyy}");
-                lines.Add($"Invoice   : {row.Invoice}");
-                lines.Add($"Produk    : {row.ProductName}");
-                lines.Add($"Qty       : {row.Quantity}");
-                lines.Add($"Harga     : Rp {row.Price:N0}");
-                lines.Add($"Total     : Rp {row.Total:N0}");
-                lines.Add($"Profit    : Rp {row.Profit:N0}");
-                lines.Add($"");
-                lines.Add($"--------------------------------------------------");
-                lines.Add($"");
-            }
-
-            lines.Add("");
-            lines.Add("==================================================");
-            lines.Add("RINGKASAN");
-            lines.Add("==================================================");
-            lines.Add($"Total Revenue : Rp {_reportRows.Sum(r => r.Total):N0}");
-            lines.Add($"Total Profit  : Rp {_reportRows.Sum(r => r.Profit):N0}");
-            lines.Add($"Items Sold    : {_reportRows.Sum(r => r.Quantity)}");
-            lines.Add($"");
-            lines.Add("==================================================");
-
-            File.WriteAllLines(filePath, lines, new UTF8Encoding(true));
-        }
-
-        private void ExportToExcel(string filePath)
-        {
-            // Export as CSV with .xlsx extension as a temporary workaround
-            // (since we don't have ClosedXML/EPPlus)
-            var encoding = new UTF8Encoding(true);
-            var lines = new List<string>
-            {
-                "Tanggal,Invoice,Produk,Qty,Harga,Total,Profit"
-            };
-
-            foreach (var row in _allReportRows)
-            {
-                lines.Add($"{row.Date:dd/MM/yyyy}," +
-                          $"\"{EscapeCsvField(row.Invoice)}\"," +
-                          $"\"{EscapeCsvField(row.ProductName)}\"," +
-                          $"{row.Quantity}," +
-                          $"{row.Price}," +
-                          $"{row.Total}," +
-                          $"{row.Profit}");
-            }
-
-            File.WriteAllLines(filePath, lines, encoding);
-        }
-
-        private string EscapeCsvField(string? field)
-        {
-            if (field == null) return "";
-            return field.Replace("\"", "\"\"");
+            var startDate = DpStartDate.SelectedDate ?? DateTime.Today;
+            var endDate = DpEndDate.SelectedDate ?? DateTime.Today;
+            return $"{startDate:dd/MM/yyyy} - {endDate:dd/MM/yyyy}";
         }
     }
 }

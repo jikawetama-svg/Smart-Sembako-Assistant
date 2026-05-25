@@ -118,7 +118,7 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
-                var result = await _service.GeneratePairingCodeAsync(_phoneNumber);
+                BaileysPairingResult result = await GeneratePairingCodeWithWarmupAsync();
                 TxtPairingStatus.Text = result.Success
                     ? "Masukkan kode pairing di WhatsApp pada nomor bot."
                     : "Kode pairing gagal dibuat.";
@@ -139,7 +139,11 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
-                ApplyCooldown(result.RetryAfterSeconds ?? _configService.Config?.Baileys?.PairingRetryCooldownSeconds ?? 30);
+                int fallbackCooldown = string.Equals(result.Reason, "not-ready", StringComparison.OrdinalIgnoreCase) ||
+                                      string.Equals(result.Reason, "pairing-in-progress", StringComparison.OrdinalIgnoreCase)
+                    ? 5
+                    : _configService.Config?.Baileys?.PairingRetryCooldownSeconds ?? 30;
+                ApplyCooldown(result.RetryAfterSeconds ?? fallbackCooldown);
                 if (string.Equals(result.Reason, "rate-limited", StringComparison.OrdinalIgnoreCase))
                 {
                     TxtPairingStatus.Text = "Permintaan pairing terlalu sering.";
@@ -155,6 +159,52 @@ namespace SmartSembakoAssistant.Views
             {
                 SetBusy(false);
             }
+        }
+
+        private async Task<BaileysPairingResult> GeneratePairingCodeWithWarmupAsync()
+        {
+            if (_service == null)
+            {
+                return new BaileysPairingResult
+                {
+                    Success = false,
+                    Message = "WhatsApp lokal belum siap.",
+                    Reason = "not-ready",
+                    RetryAfterSeconds = 5
+                };
+            }
+
+            BaileysPairingResult? lastResult = null;
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                lastResult = await _service.GeneratePairingCodeAsync(_phoneNumber);
+                if (lastResult.Success ||
+                    !IsTransientPairingReason(lastResult.Reason))
+                {
+                    return lastResult;
+                }
+
+                TxtPairingStatus.Text = $"Menunggu socket WhatsApp siap... ({attempt}/3)";
+                TxtPairingDiagnostics.Text = lastResult.Message;
+                await Task.Delay(2000);
+                await _service.GetSessionStatusAsync();
+            }
+
+            return lastResult ?? new BaileysPairingResult
+            {
+                Success = false,
+                Message = "WhatsApp lokal belum siap.",
+                Reason = "not-ready",
+                RetryAfterSeconds = 5
+            };
+        }
+
+        private static bool IsTransientPairingReason(string? reason)
+        {
+            return string.Equals(reason, "not-ready", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(reason, "connection-closed", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(reason, "pairing-in-progress", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(reason, "upstream-failure", StringComparison.OrdinalIgnoreCase);
         }
 
         private void StartPairingPoll()
@@ -244,7 +294,9 @@ namespace SmartSembakoAssistant.Views
         {
             var confirm = MessageBox.Show(
                 this,
-                "Fallback QR akan reset sesi WhatsApp lokal lalu membuat QR baru. Gunakan ini jika pairing code nomor telepon terus ditolak.",
+                _isLoggedOut
+                    ? "Sesi WhatsApp lokal logged out. QR fallback akan reset sesi lalu membuat QR baru."
+                    : "Fallback QR akan membuat QR baru tanpa menghapus sesi yang masih valid. Gunakan ini jika pairing code nomor telepon terus ditolak.",
                 "Fallback QR Pairing",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Information);
@@ -268,13 +320,16 @@ namespace SmartSembakoAssistant.Views
             try
             {
                 _service ??= new BaileysSidecarService(_configService, _loggingService);
+                bool shouldResetForQr = _isLoggedOut;
                 TxtPairingStatus.Text = "Menyiapkan fallback QR...";
-                TxtPairingDiagnostics.Text = "Reset sesi lokal dan menunggu QR dari Baileys.";
+                TxtPairingDiagnostics.Text = shouldResetForQr
+                    ? "Reset sesi lokal dan menunggu QR dari Baileys."
+                    : "Menunggu QR dari Baileys tanpa menghapus sesi lokal.";
                 _isLoggedOut = false;
                 SetPairingCode(null);
                 ClearQrCode();
 
-                var result = await _service.StartQrPairingAsync(resetSessionFirst: true);
+                var result = await _service.StartQrPairingAsync(resetSessionFirst: shouldResetForQr);
                 TxtPairingStatus.Text = result.Success
                     ? "Scan QR dari WhatsApp nomor bot."
                     : "QR pairing gagal dibuat.";
@@ -324,9 +379,12 @@ namespace SmartSembakoAssistant.Views
 
         private async void BtnResetSession_Click(object sender, RoutedEventArgs e)
         {
+            string resetMessage = _isConnected
+                ? "Reset akan menghapus sesi WhatsApp lokal yang sedang terhubung. Setelah reset, nomor bot harus dipairing ulang."
+                : "Reset akan menghapus sesi WhatsApp lokal. Gunakan jika pairing gagal berulang atau status menunjukkan logged out.";
             var confirm = MessageBox.Show(
                 this,
-                "Reset akan menghapus sesi WhatsApp lokal. Gunakan hanya jika pairing gagal berulang atau status menunjukkan logged out. Setelah reset, tunggu cooldown sebelum generate kode baru.",
+                $"{resetMessage}\n\nLanjutkan reset sesi lokal?",
                 "Reset Sesi Lokal",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
@@ -337,23 +395,34 @@ namespace SmartSembakoAssistant.Views
             }
 
             SetBusy(true);
+            bool wasConnected = _isConnected;
             try
             {
                 _service ??= new BaileysSidecarService(_configService, _loggingService);
                 var result = await _service.ResetSessionAsync();
                 TxtPairingStatus.Text = result.Success ? "Sesi lokal direset." : "Reset sesi gagal.";
                 TxtPairingDiagnostics.Text = result.Message;
-                _isLoggedOut = false;
-                SetPairingCode(null);
-                ClearQrCode();
-                _codeExpiresAt = null;
-                _qrExpiresAt = null;
-                ApplyCooldown(result.RetryAfterSeconds ?? _configService.Config?.Baileys?.PairingRetryCooldownSeconds ?? 30);
+                if (result.Success)
+                {
+                    _isConnected = false;
+                    PairingSucceeded = false;
+                    _isLoggedOut = false;
+                    SetPairingCode(null);
+                    ClearQrCode();
+                    _codeExpiresAt = null;
+                    _qrExpiresAt = null;
+                    ApplyCooldown(result.RetryAfterSeconds ?? _configService.Config?.Baileys?.PairingRetryCooldownSeconds ?? 30);
+                }
+                else
+                {
+                    _isConnected = wasConnected;
+                }
             }
             catch (Exception ex)
             {
                 TxtPairingStatus.Text = "Reset sesi gagal.";
                 TxtPairingDiagnostics.Text = ex.Message;
+                _isConnected = wasConnected;
             }
             finally
             {
@@ -446,14 +515,13 @@ namespace SmartSembakoAssistant.Views
 
             DateTime? blockedUntil = GetBlockedUntil(now);
             bool blocked = blockedUntil.HasValue && blockedUntil.Value > now;
-            bool cooldownBlocked = _cooldownUntil.HasValue && _cooldownUntil.Value > now;
             BtnGenerateCode.IsEnabled = !_isBusy && !_isConnected && !blocked && !_isLoggedOut;
             BtnGenerateCode.Content = _isLoggedOut
                 ? "Reset Sesi Lokal dulu"
                 : blocked
                 ? $"Generate Kode Baru dalam {FormatRemaining(blockedUntil!.Value - now)}"
                 : "Generate Kode Baru";
-            BtnResetSession.IsEnabled = !_isBusy && !_isConnected && (!cooldownBlocked || _isLoggedOut);
+            BtnResetSession.IsEnabled = !_isBusy;
             BtnGenerateQr.IsEnabled = !_isBusy && !_isConnected;
             BtnCopyCode.IsEnabled = !_isBusy && !string.IsNullOrWhiteSpace(_rawPairingCode);
             BtnClose.IsEnabled = !_isBusy || _isConnected;

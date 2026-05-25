@@ -1,5 +1,5 @@
-#ifndef MyAppVersion
-#define MyAppVersion "5.0.0"
+﻿#ifndef MyAppVersion
+#define MyAppVersion "5.0.2"
 #endif
 #define MyAppName "Smart Sembako Assistant"
 #define MyAppPublisher "SA TECH.Inc"

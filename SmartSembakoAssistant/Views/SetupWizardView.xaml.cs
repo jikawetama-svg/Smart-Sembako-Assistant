@@ -34,8 +34,8 @@ namespace SmartSembakoAssistant.Views
             var config = _configService.Config ?? new Models.AppConfig();
 
             SelectMode(config.Setup?.PreferredChannelMode ?? "WhatsAppOnly");
-            TxtBotPhoneNumber.Text = config.Baileys?.BotPhoneNumber ?? "";
-            TxtOwnerPhoneNumber.Text = config.Baileys?.OwnerNumbers?.FirstOrDefault() ?? config.WhatsApp?.OwnerNumbers?.FirstOrDefault() ?? "";
+            TxtBotPhoneNumber.Text = CleanPlaceholderPhone(config.Baileys?.BotPhoneNumber);
+            TxtOwnerPhoneNumber.Text = CleanPlaceholderPhone(config.Baileys?.OwnerNumbers?.FirstOrDefault() ?? config.WhatsApp?.OwnerNumbers?.FirstOrDefault());
             TxtGroqApiKey.Text = config.Groq?.ApiKey == "YOUR_GROQ_API_KEY" ? "" : config.Groq?.ApiKey ?? "";
             TxtTelegramToken.Text = config.Telegram?.BotToken == "YOUR_TELEGRAM_BOT_TOKEN" ? "" : config.Telegram?.BotToken ?? "";
 
@@ -279,6 +279,12 @@ namespace SmartSembakoAssistant.Views
                 "Telegram saja" => "TelegramOnly",
                 _ => "WhatsAppOnly"
             };
+        }
+
+        private static string CleanPlaceholderPhone(string? value)
+        {
+            string normalized = AutomationEngine.NormalizeWhatsAppNumber(value);
+            return normalized == "6281234567890" || normalized == "6280000000000" ? string.Empty : value ?? string.Empty;
         }
     }
 }

@@ -55,5 +55,5 @@ this Agreement, do not install or use the Software.
 
 For support or inquiries:
 Publisher  : SA TECH.Inc
-Product    : Smart Sembako Assistant v5.0.0
-Year       : 2026
+Product    : Smart Sembako Assistant
+Copyright (c) 2026 SA TECH.Inc

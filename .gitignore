@@ -7,10 +7,19 @@
 config.json
 *.env
 .env*
+*credentials*.json
+*service-account*.json
+automation-sheets-*.json
+*-b2b070766971.json
+data/*.db
+data/memory.db
+data/baileys-session*/
 
 # --- Runtime besar (jangan di-push ke repo) ---
 cloudflared.exe
 *.exe
+*.zip
+*.rar
 runtimes/
 
 # --- Log & error ---
@@ -37,9 +46,12 @@ desktop.ini
 
 # --- Node.js (jika ada di root) ---
 node_modules/
+**/node_modules/
 
 # --- Temporary ---
 Tempt/
+.codex-build/
+.codex-obj-upgrade/
 *.tmp
 *.bak
 

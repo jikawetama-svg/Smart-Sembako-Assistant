@@ -150,6 +150,63 @@ namespace SmartSembakoAssistant.Helpers
                 rows);
         }
 
+        public static string GenerateCustomerDocumentCsv(IEnumerable<CustomerDocumentSummary> documents, string customerName)
+        {
+            var rows = documents.Select((item, index) => new[]
+            {
+                (index + 1).ToString(),
+                customerName,
+                item.DocumentNumber ?? string.Empty,
+                item.Date?.ToString("yyyy-MM-dd") ?? string.Empty,
+                item.Total.ToString("0.##"),
+                item.ItemCount.ToString(),
+                item.OutstandingBalance.ToString("0.##")
+            });
+
+            return BuildCsv(
+                new[] { "No", "Pelanggan", "Nota", "Tanggal", "Total", "Jumlah Item", "Sisa Piutang" },
+                rows);
+        }
+
+        public static string GenerateDocumentItemCsv(DocumentInfo document, IEnumerable<DocumentItemInfo> items)
+        {
+            var rows = items.Select((item, index) => new[]
+            {
+                (index + 1).ToString(),
+                document.Number ?? string.Empty,
+                document.Date?.ToString("yyyy-MM-dd") ?? string.Empty,
+                document.CustomerName ?? string.Empty,
+                item.ProductName ?? string.Empty,
+                item.Quantity.ToString("0.##"),
+                item.Unit ?? string.Empty,
+                item.Price.ToString("0.##"),
+                item.Total.ToString("0.##")
+            });
+
+            return BuildCsv(
+                new[] { "No", "Nota", "Tanggal", "Pelanggan", "Produk", "Qty", "Satuan", "Harga", "Total" },
+                rows);
+        }
+
+        public static string GenerateReceivableDetailCsv(string customerName, IEnumerable<ReceivableInvoice> invoices)
+        {
+            var rows = invoices.Select((item, index) => new[]
+            {
+                (index + 1).ToString(),
+                customerName,
+                item.DocumentNumber ?? string.Empty,
+                item.Date?.ToString("yyyy-MM-dd") ?? string.Empty,
+                item.DueDate?.ToString("yyyy-MM-dd") ?? string.Empty,
+                item.InvoiceTotal.ToString("0.##"),
+                item.PaidAmount.ToString("0.##"),
+                item.OutstandingBalance.ToString("0.##")
+            });
+
+            return BuildCsv(
+                new[] { "No", "Pelanggan", "Nota", "Tanggal", "Jatuh Tempo", "Total Faktur", "Terbayar", "Sisa" },
+                rows);
+        }
+
         private static string BuildCsv(IEnumerable<string> headers, IEnumerable<IEnumerable<string>> rows)
         {
             var sb = new StringBuilder();

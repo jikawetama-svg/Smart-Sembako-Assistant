@@ -162,6 +162,15 @@ namespace SmartSembakoAssistant.Services
                         message_id TEXT,
                         correlation_id TEXT NOT NULL,
                         payload_hash TEXT,
+                        app_instance_id TEXT,
+                        source_app_instance_id TEXT,
+                        source_machine_name TEXT,
+                        raw_sender_jid TEXT,
+                        resolved_sender_jid TEXT,
+                        upsert_type TEXT,
+                        original_upsert_type TEXT,
+                        sidecar_started_at TEXT,
+                        message_timestamp_ms INTEGER,
                         text TEXT,
                         status TEXT NOT NULL,
                         last_error TEXT,
@@ -179,11 +188,17 @@ namespace SmartSembakoAssistant.Services
                         text TEXT NOT NULL,
                         parse_mode TEXT,
                         media_url TEXT,
+                        menu_keyboard_type TEXT,
                         message_kind TEXT DEFAULT 'text',
                         template_name TEXT,
                         template_language_code TEXT,
                         template_body_parameter_count INTEGER DEFAULT 0,
                         requires_confirmation INTEGER DEFAULT 0,
+                        app_instance_id TEXT,
+                        source_inbound_message_id TEXT,
+                        source_inbound_received_at TEXT,
+                        expires_at TEXT,
+                        outbound_source_type TEXT DEFAULT 'manual_admin',
                         status TEXT NOT NULL,
                         attempt_count INTEGER DEFAULT 0,
                         next_attempt_at TEXT NOT NULL,
@@ -280,6 +295,8 @@ namespace SmartSembakoAssistant.Services
                         child_product_id TEXT NOT NULL,
                         child_product_name TEXT,
                         conversion_rate REAL NOT NULL,
+                        family_name TEXT,
+                        notes TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     )";
@@ -324,9 +341,26 @@ namespace SmartSembakoAssistant.Services
                     command.ExecuteNonQuery();
                 }
                 EnsureColumnExists(connection, "outbound_messages", "message_kind", "TEXT DEFAULT 'text'");
+                EnsureColumnExists(connection, "outbound_messages", "menu_keyboard_type", "TEXT");
                 EnsureColumnExists(connection, "outbound_messages", "template_name", "TEXT");
                 EnsureColumnExists(connection, "outbound_messages", "template_language_code", "TEXT");
                 EnsureColumnExists(connection, "outbound_messages", "template_body_parameter_count", "INTEGER DEFAULT 0");
+                EnsureColumnExists(connection, "outbound_messages", "app_instance_id", "TEXT");
+                EnsureColumnExists(connection, "outbound_messages", "source_inbound_message_id", "TEXT");
+                EnsureColumnExists(connection, "outbound_messages", "source_inbound_received_at", "TEXT");
+                EnsureColumnExists(connection, "outbound_messages", "expires_at", "TEXT");
+                EnsureColumnExists(connection, "outbound_messages", "outbound_source_type", "TEXT DEFAULT 'manual_admin'");
+                EnsureColumnExists(connection, "inbound_events", "app_instance_id", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "source_app_instance_id", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "source_machine_name", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "raw_sender_jid", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "resolved_sender_jid", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "upsert_type", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "original_upsert_type", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "sidecar_started_at", "TEXT");
+                EnsureColumnExists(connection, "inbound_events", "message_timestamp_ms", "INTEGER");
+                EnsureColumnExists(connection, "unit_conversion_mappings", "family_name", "TEXT");
+                EnsureColumnExists(connection, "unit_conversion_mappings", "notes", "TEXT");
 
                 using (var command = new SqliteCommand(createMessageStatusEventsTable, connection))
                 {
@@ -415,7 +449,10 @@ namespace SmartSembakoAssistant.Services
                     "CREATE INDEX IF NOT EXISTS idx_users_whatsapp_number ON users(whatsapp_number)",
                     "CREATE INDEX IF NOT EXISTS idx_conversation_sessions_user_id ON conversation_sessions(user_id)",
                     "CREATE INDEX IF NOT EXISTS idx_inbound_events_received_at ON inbound_events(received_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_inbound_events_message_id ON inbound_events(message_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_inbound_events_sender_received ON inbound_events(sender_id, received_at)",
                     "CREATE INDEX IF NOT EXISTS idx_outbound_messages_status_attempt ON outbound_messages(status, next_attempt_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_outbound_messages_correlation_recipient ON outbound_messages(correlation_id, channel, recipient_id, status)",
                     "CREATE INDEX IF NOT EXISTS idx_outbound_messages_external_id ON outbound_messages(external_message_id)",
                     "CREATE INDEX IF NOT EXISTS idx_message_status_events_external_id ON message_status_events(external_message_id)",
                     "CREATE INDEX IF NOT EXISTS idx_automation_executions_created_at ON automation_executions(created_at)",
@@ -438,6 +475,8 @@ namespace SmartSembakoAssistant.Services
                     command.Parameters.AddWithValue("@now", ToDbTimestamp(DateTime.Now));
                     command.ExecuteNonQuery();
                 }
+
+                CleanupOldRuntimeData(connection);
             }
             catch (Exception ex)
             {
@@ -448,6 +487,37 @@ namespace SmartSembakoAssistant.Services
         private static string ToDbTimestamp(DateTime value)
         {
             return value.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+
+        private static void CleanupOldRuntimeData(SqliteConnection connection)
+        {
+            ExecuteCleanup(
+                connection,
+                "DELETE FROM inbound_events WHERE processed_at IS NOT NULL AND processed_at < @cutoff",
+                DateTime.Now.AddDays(-7));
+            ExecuteCleanup(
+                connection,
+                "DELETE FROM outbound_messages WHERE status IN ('sent', 'dead_letter') AND updated_at < @cutoff",
+                DateTime.Now.AddDays(-7));
+            ExecuteCleanup(
+                connection,
+                "DELETE FROM logs WHERE level = 'Info' AND timestamp < @cutoff",
+                DateTime.Now.AddDays(-30));
+            ExecuteCleanup(
+                connection,
+                "DELETE FROM logs WHERE level IN ('Error', 'Warning') AND timestamp < @cutoff",
+                DateTime.Now.AddDays(-90));
+            ExecuteCleanup(
+                connection,
+                "DELETE FROM conversations WHERE timestamp < @cutoff",
+                DateTime.Now.AddDays(-60));
+        }
+
+        private static void ExecuteCleanup(SqliteConnection connection, string sql, DateTime cutoff)
+        {
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@cutoff", ToDbTimestamp(cutoff));
+            command.ExecuteNonQuery();
         }
 
         private static DateTime ParseDbTimestamp(string? value)
@@ -533,8 +603,10 @@ namespace SmartSembakoAssistant.Services
                 ChildProductId = reader.GetString(3),
                 ChildProductName = reader.IsDBNull(4) ? null : reader.GetString(4),
                 ConversionRate = reader.GetDecimal(5),
-                CreatedAt = ParseDbTimestamp(reader.GetString(6)),
-                UpdatedAt = ParseDbTimestamp(reader.GetString(7))
+                FamilyName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Notes = reader.IsDBNull(7) ? null : reader.GetString(7),
+                CreatedAt = ParseDbTimestamp(reader.GetString(8)),
+                UpdatedAt = ParseDbTimestamp(reader.GetString(9))
             };
         }
 
@@ -1186,10 +1258,16 @@ namespace SmartSembakoAssistant.Services
 
             string sql = @"
                 INSERT INTO inbound_events (
-                    channel, sender_id, message_key, message_id, correlation_id, payload_hash, text, status, received_at
+                    channel, sender_id, message_key, message_id, correlation_id, payload_hash, app_instance_id,
+                    source_app_instance_id, source_machine_name, raw_sender_jid, resolved_sender_jid,
+                    upsert_type, original_upsert_type, sidecar_started_at, message_timestamp_ms,
+                    text, status, received_at
                 )
                 VALUES (
-                    @channel, @sender_id, @message_key, @message_id, @correlation_id, @payload_hash, @text, @status, @received_at
+                    @channel, @sender_id, @message_key, @message_id, @correlation_id, @payload_hash, @app_instance_id,
+                    @source_app_instance_id, @source_machine_name, @raw_sender_jid, @resolved_sender_jid,
+                    @upsert_type, @original_upsert_type, @sidecar_started_at, @message_timestamp_ms,
+                    @text, @status, @received_at
                 );";
 
             using var command = new SqliteCommand(sql, connection);
@@ -1199,6 +1277,15 @@ namespace SmartSembakoAssistant.Services
             command.Parameters.AddWithValue("@message_id", message.MessageId ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@correlation_id", correlationId);
             command.Parameters.AddWithValue("@payload_hash", message.PayloadHash ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@app_instance_id", message.AppInstanceId ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@source_app_instance_id", message.SourceAppInstanceId ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@source_machine_name", message.SourceMachineName ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@raw_sender_jid", message.RawSenderJid ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@resolved_sender_jid", message.ResolvedSenderJid ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@upsert_type", message.UpsertType ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@original_upsert_type", message.OriginalUpsertType ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@sidecar_started_at", message.SidecarStartedAt.HasValue ? ToDbTimestamp(message.SidecarStartedAt.Value) : (object)DBNull.Value);
+            command.Parameters.AddWithValue("@message_timestamp_ms", message.MessageTimestampMs.HasValue ? message.MessageTimestampMs.Value : (object)DBNull.Value);
             command.Parameters.AddWithValue("@text", message.Text ?? string.Empty);
             command.Parameters.AddWithValue("@status", "received");
             command.Parameters.AddWithValue("@received_at", ToDbTimestamp(message.Timestamp == default ? DateTime.Now : message.Timestamp));
@@ -1255,12 +1342,14 @@ namespace SmartSembakoAssistant.Services
             string sql = @"
                 INSERT INTO outbound_messages (
                     correlation_id, channel, recipient_id, text, parse_mode, media_url,
-                    message_kind, template_name, template_language_code, template_body_parameter_count, requires_confirmation,
+                    menu_keyboard_type, message_kind, template_name, template_language_code, template_body_parameter_count, requires_confirmation, app_instance_id,
+                    source_inbound_message_id, source_inbound_received_at, expires_at, outbound_source_type,
                     status, attempt_count, next_attempt_at, created_at, updated_at
                 )
                 VALUES (
                     @correlation_id, @channel, @recipient_id, @text, @parse_mode, @media_url,
-                    @message_kind, @template_name, @template_language_code, @template_body_parameter_count, @requires_confirmation,
+                    @menu_keyboard_type, @message_kind, @template_name, @template_language_code, @template_body_parameter_count, @requires_confirmation, @app_instance_id,
+                    @source_inbound_message_id, @source_inbound_received_at, @expires_at, @outbound_source_type,
                     @status, 0, @next_attempt_at, @created_at, @updated_at
                 );
                 SELECT last_insert_rowid();";
@@ -1272,11 +1361,17 @@ namespace SmartSembakoAssistant.Services
             command.Parameters.AddWithValue("@text", message.Text);
             command.Parameters.AddWithValue("@parse_mode", message.ParseMode ?? string.Empty);
             command.Parameters.AddWithValue("@media_url", message.MediaUrl ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@menu_keyboard_type", message.MenuKeyboardType ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@message_kind", string.IsNullOrWhiteSpace(message.MessageKind) ? "text" : message.MessageKind);
             command.Parameters.AddWithValue("@template_name", message.TemplateName ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@template_language_code", message.TemplateLanguageCode ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@template_body_parameter_count", Math.Max(0, message.TemplateBodyParameterCount));
             command.Parameters.AddWithValue("@requires_confirmation", message.RequiresConfirmation ? 1 : 0);
+            command.Parameters.AddWithValue("@app_instance_id", message.AppInstanceId ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@source_inbound_message_id", message.SourceInboundMessageId ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@source_inbound_received_at", message.SourceInboundReceivedAt.HasValue ? ToDbTimestamp(message.SourceInboundReceivedAt.Value) : (object)DBNull.Value);
+            command.Parameters.AddWithValue("@expires_at", message.ExpiresAt.HasValue ? ToDbTimestamp(message.ExpiresAt.Value) : (object)DBNull.Value);
+            command.Parameters.AddWithValue("@outbound_source_type", string.IsNullOrWhiteSpace(message.OutboundSourceType) ? "manual_admin" : message.OutboundSourceType);
             command.Parameters.AddWithValue("@status", "queued");
             command.Parameters.AddWithValue("@next_attempt_at", ToDbTimestamp(now));
             command.Parameters.AddWithValue("@created_at", ToDbTimestamp(now));
@@ -1295,7 +1390,8 @@ namespace SmartSembakoAssistant.Services
 
             string sql = @"
                 SELECT id, correlation_id, channel, recipient_id, text, parse_mode, media_url,
-                       message_kind, template_name, template_language_code, template_body_parameter_count, requires_confirmation,
+                       menu_keyboard_type, message_kind, template_name, template_language_code, template_body_parameter_count, requires_confirmation, app_instance_id,
+                       source_inbound_message_id, source_inbound_received_at, expires_at, outbound_source_type,
                        status, attempt_count, next_attempt_at, created_at, updated_at, external_message_id,
                        last_error, last_status_event_at
                 FROM outbound_messages
@@ -1329,23 +1425,57 @@ namespace SmartSembakoAssistant.Services
                     Text = reader.GetString(4),
                     ParseMode = reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
                     MediaUrl = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    MessageKind = reader.IsDBNull(7) ? "text" : reader.GetString(7),
-                    TemplateName = reader.IsDBNull(8) ? null : reader.GetString(8),
-                    TemplateLanguageCode = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    TemplateBodyParameterCount = reader.IsDBNull(10) ? 0 : reader.GetInt32(10),
-                    RequiresConfirmation = reader.GetInt32(11) == 1,
-                    Status = reader.GetString(12),
-                    AttemptCount = reader.GetInt32(13),
-                    NextAttemptAt = ParseDbTimestamp(reader.GetString(14)),
-                    CreatedAt = ParseDbTimestamp(reader.GetString(15)),
-                    UpdatedAt = ParseDbTimestamp(reader.GetString(16)),
-                    ExternalMessageId = reader.IsDBNull(17) ? null : reader.GetString(17),
-                    LastError = reader.IsDBNull(18) ? null : reader.GetString(18),
-                    LastStatusEventAt = reader.IsDBNull(19) ? null : ParseDbTimestamp(reader.GetString(19))
+                    MenuKeyboardType = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    MessageKind = reader.IsDBNull(8) ? "text" : reader.GetString(8),
+                    TemplateName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    TemplateLanguageCode = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    TemplateBodyParameterCount = reader.IsDBNull(11) ? 0 : reader.GetInt32(11),
+                    RequiresConfirmation = reader.GetInt32(12) == 1,
+                    AppInstanceId = reader.IsDBNull(13) ? null : reader.GetString(13),
+                    SourceInboundMessageId = reader.IsDBNull(14) ? null : reader.GetString(14),
+                    SourceInboundReceivedAt = reader.IsDBNull(15) ? null : ParseDbTimestamp(reader.GetString(15)),
+                    ExpiresAt = reader.IsDBNull(16) ? null : ParseDbTimestamp(reader.GetString(16)),
+                    OutboundSourceType = reader.IsDBNull(17) ? "manual_admin" : reader.GetString(17),
+                    Status = reader.GetString(18),
+                    AttemptCount = reader.GetInt32(19),
+                    NextAttemptAt = ParseDbTimestamp(reader.GetString(20)),
+                    CreatedAt = ParseDbTimestamp(reader.GetString(21)),
+                    UpdatedAt = ParseDbTimestamp(reader.GetString(22)),
+                    ExternalMessageId = reader.IsDBNull(23) ? null : reader.GetString(23),
+                    LastError = reader.IsDBNull(24) ? null : reader.GetString(24),
+                    LastStatusEventAt = reader.IsDBNull(25) ? null : ParseDbTimestamp(reader.GetString(25))
                 });
             }
 
             return messages;
+        }
+
+        public async Task<bool> HasSentOutboundForCorrelationRecipientAsync(OutboundMessageRecord record)
+        {
+            if (string.IsNullOrWhiteSpace(record.CorrelationId) || string.IsNullOrWhiteSpace(record.RecipientId))
+            {
+                return false;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            string sql = @"
+                SELECT COUNT(1)
+                FROM outbound_messages
+                WHERE id <> @id
+                  AND correlation_id = @correlation_id
+                  AND channel = @channel
+                  AND recipient_id = @recipient_id
+                  AND status = 'sent'";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@id", record.Id);
+            command.Parameters.AddWithValue("@correlation_id", record.CorrelationId);
+            command.Parameters.AddWithValue("@channel", record.Channel.ToString());
+            command.Parameters.AddWithValue("@recipient_id", record.RecipientId);
+            long count = (long)(await command.ExecuteScalarAsync() ?? 0L);
+            return count > 0;
         }
 
         public async Task MarkOutboundSentAsync(long id, string? externalMessageId)
@@ -1927,7 +2057,7 @@ namespace SmartSembakoAssistant.Services
             await connection.OpenAsync();
 
             const string sql = @"
-                SELECT id, parent_product_id, parent_product_name, child_product_id, child_product_name, conversion_rate, created_at, updated_at
+                SELECT id, parent_product_id, parent_product_name, child_product_id, child_product_name, conversion_rate, family_name, notes, created_at, updated_at
                 FROM unit_conversion_mappings
                 ORDER BY COALESCE(parent_product_name, ''), parent_product_id";
 
@@ -1953,7 +2083,7 @@ namespace SmartSembakoAssistant.Services
             await connection.OpenAsync();
 
             const string sql = @"
-                SELECT id, parent_product_id, parent_product_name, child_product_id, child_product_name, conversion_rate, created_at, updated_at
+                SELECT id, parent_product_id, parent_product_name, child_product_id, child_product_name, conversion_rate, family_name, notes, created_at, updated_at
                 FROM unit_conversion_mappings
                 WHERE parent_product_id = @parent_product_id
                 LIMIT 1";
@@ -2000,10 +2130,10 @@ namespace SmartSembakoAssistant.Services
 
             const string sql = @"
                 INSERT INTO unit_conversion_mappings (
-                    id, parent_product_id, parent_product_name, child_product_id, child_product_name, conversion_rate, created_at, updated_at
+                    id, parent_product_id, parent_product_name, child_product_id, child_product_name, conversion_rate, family_name, notes, created_at, updated_at
                 )
                 VALUES (
-                    @id, @parent_product_id, @parent_product_name, @child_product_id, @child_product_name, @conversion_rate, @created_at, @updated_at
+                    @id, @parent_product_id, @parent_product_name, @child_product_id, @child_product_name, @conversion_rate, @family_name, @notes, @created_at, @updated_at
                 )
                 ON CONFLICT(parent_product_id) DO UPDATE SET
                     id = excluded.id,
@@ -2011,6 +2141,8 @@ namespace SmartSembakoAssistant.Services
                     child_product_id = excluded.child_product_id,
                     child_product_name = excluded.child_product_name,
                     conversion_rate = excluded.conversion_rate,
+                    family_name = excluded.family_name,
+                    notes = excluded.notes,
                     updated_at = excluded.updated_at";
 
             using var command = new SqliteCommand(sql, connection);
@@ -2020,6 +2152,8 @@ namespace SmartSembakoAssistant.Services
             command.Parameters.AddWithValue("@child_product_id", mapping.ChildProductId.Trim());
             command.Parameters.AddWithValue("@child_product_name", mapping.ChildProductName ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@conversion_rate", mapping.ConversionRate);
+            command.Parameters.AddWithValue("@family_name", mapping.FamilyName ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@notes", mapping.Notes ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@created_at", ToDbTimestamp(createdAt));
             command.Parameters.AddWithValue("@updated_at", ToDbTimestamp(updatedAt));
             await command.ExecuteNonQueryAsync();
@@ -2037,6 +2171,21 @@ namespace SmartSembakoAssistant.Services
 
             using var command = new SqliteCommand("DELETE FROM unit_conversion_mappings WHERE id = @id", connection);
             command.Parameters.AddWithValue("@id", id.Trim());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        public async Task DeleteUnitConversionByParentIdAsync(string parentProductId)
+        {
+            if (string.IsNullOrWhiteSpace(parentProductId))
+            {
+                return;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            using var command = new SqliteCommand("DELETE FROM unit_conversion_mappings WHERE parent_product_id = @parent_product_id", connection);
+            command.Parameters.AddWithValue("@parent_product_id", parentProductId.Trim());
             await command.ExecuteNonQueryAsync();
         }
 
@@ -2077,6 +2226,67 @@ namespace SmartSembakoAssistant.Services
             using var command = new SqliteCommand("SELECT COUNT(*) FROM outbound_messages WHERE status IN ('queued', 'retry')", connection);
             var result = command.ExecuteScalar();
             return Convert.ToInt32(result);
+        }
+
+        public int GetPendingWhatsAppLikeOutboundCount()
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            connection.Open();
+
+            using var command = new SqliteCommand(@"
+                SELECT COUNT(*)
+                FROM outbound_messages
+                WHERE status IN ('queued', 'retry')
+                  AND channel IN ('WhatsApp', 'Baileys')", connection);
+            var result = command.ExecuteScalar();
+            return Convert.ToInt32(result);
+        }
+
+        public async Task<OutboxCleanupResult> CancelPendingWhatsAppLikeOutboxAsync(
+            string reason,
+            DateTime? createdBefore = null)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var result = new OutboxCleanupResult
+            {
+                WhatsAppCancelled = await CancelPendingOutboxByChannelAsync(connection, "WhatsApp", reason, createdBefore),
+                BaileysCancelled = await CancelPendingOutboxByChannelAsync(connection, "Baileys", reason, createdBefore)
+            };
+            result.TotalCancelled = result.WhatsAppCancelled + result.BaileysCancelled;
+            return result;
+        }
+
+        private static async Task<int> CancelPendingOutboxByChannelAsync(
+            SqliteConnection connection,
+            string channel,
+            string reason,
+            DateTime? createdBefore)
+        {
+            string sql = @"
+                UPDATE outbound_messages
+                SET status = 'dead_letter',
+                    last_error = @reason,
+                    updated_at = @updated_at
+                WHERE status IN ('queued', 'retry')
+                  AND channel = @channel";
+
+            if (createdBefore.HasValue)
+            {
+                sql += " AND created_at < @created_before";
+            }
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@reason", reason);
+            command.Parameters.AddWithValue("@updated_at", ToDbTimestamp(DateTime.Now));
+            command.Parameters.AddWithValue("@channel", channel);
+            if (createdBefore.HasValue)
+            {
+                command.Parameters.AddWithValue("@created_before", ToDbTimestamp(createdBefore.Value));
+            }
+
+            return await command.ExecuteNonQueryAsync();
         }
 
         #endregion

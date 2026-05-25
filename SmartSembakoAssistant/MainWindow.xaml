@@ -137,7 +137,7 @@
                             <TextBlock Text="🏪" FontSize="24"/>
                             <StackPanel Margin="10,0,0,0">
                                 <TextBlock Text="Smart Sembako" FontSize="14" FontWeight="Bold" Foreground="#F1F5F9"/>
-                                <TextBlock Text="Assistant v5.0" FontSize="9" Foreground="#64748B"/>
+                                <TextBlock x:Name="TxtAppVersion" Text="Assistant v..." FontSize="9" Foreground="#64748B"/>
                             </StackPanel>
                         </StackPanel>
                         <Rectangle Height="1" Fill="#334155" Margin="0,12,0,0"/>
@@ -152,12 +152,13 @@
                     <Button x:Name="BtnMonitoring" Content="📦  Stock"
                             Style="{StaticResource NavButtonStyle}"
                             Click="BtnMonitoring_Click" Margin="0,0,0,2"/>
-                    <Button x:Name="BtnAnalytics" Content="📈  Analytics"
+                    <Button x:Name="BtnAnalytics" Content="📈  Penjualan"
                             Style="{StaticResource NavButtonStyle}"
                             Click="BtnAnalytics_Click" Margin="0,0,0,2"/>
                     <Button x:Name="BtnReports" Content="📑  Reports"
                             Style="{StaticResource NavButtonStyle}"
-                            Click="BtnReports_Click" Margin="0,0,0,2"/>
+                            Click="BtnReports_Click" Margin="0,0,0,2"
+                            Visibility="Collapsed"/>
                     <Button x:Name="BtnAIChat" Content="💬  AI Chat"
                             Style="{StaticResource NavButtonStyle}"
                             Click="BtnAIChat_Click" Margin="0,0,0,2"/>

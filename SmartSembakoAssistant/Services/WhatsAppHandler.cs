@@ -669,6 +669,10 @@ namespace SmartSembakoAssistant.Services
                 return;
             }
 
+            string normalizedUpsertType = string.IsNullOrWhiteSpace(payload.UpsertType)
+                ? "notify"
+                : payload.UpsertType.Trim();
+
             var inbound = new InboundMessage
             {
                 Channel = ChannelType.Baileys,
@@ -676,6 +680,18 @@ namespace SmartSembakoAssistant.Services
                 SenderName = payload.SenderName,
                 Text = payload.Text ?? payload.Caption ?? string.Empty,
                 MediaUrl = payload.MediaUrl,
+                MediaMimeType = payload.MediaMimeType,
+                FileName = payload.FileName,
+                RawSenderJid = payload.RawSenderJid,
+                ResolvedSenderJid = payload.ResolvedSenderJid,
+                AppInstanceId = _configService.Config?.App?.InstanceId,
+                SourceAppInstanceId = payload.AppInstanceId,
+                SourceMachineName = payload.MachineName,
+                UpsertType = normalizedUpsertType,
+                OriginalUpsertType = payload.OriginalUpsertType ?? payload.UpsertType,
+                SidecarStartedAt = payload.SidecarStartedAt,
+                ReceivedAt = payload.ReceivedAt,
+                MessageTimestampMs = payload.MessageTimestampMs,
                 MessageId = payload.MessageId,
                 CorrelationId = payload.CorrelationId,
                 Timestamp = payload.Timestamp ?? DateTime.Now
@@ -685,7 +701,7 @@ namespace SmartSembakoAssistant.Services
             await _loggingService.LogInfoAsync(
                 $"Baileys inbound diterima dari {inbound.SenderId}: {inbound.Text}",
                 "WhatsApp",
-                $"message_id={inbound.MessageId ?? "-"}; raw_jid={payload.RawSenderJid ?? "-"}; resolved_jid={payload.ResolvedSenderJid ?? "-"}",
+                $"message_id={inbound.MessageId ?? "-"}; raw_jid={payload.RawSenderJid ?? "-"}; resolved_jid={payload.ResolvedSenderJid ?? "-"}; source_instance={payload.AppInstanceId ?? "-"}; source_machine={payload.MachineName ?? "-"}; upsert={normalizedUpsertType}; original_upsert={payload.OriginalUpsertType ?? payload.UpsertType ?? "-"}; sidecar_build={payload.SidecarBuildTag ?? "-"}; media={payload.MediaMimeType ?? "-"}; file={payload.FileName ?? "-"}",
                 inbound.SenderId);
             await _automationEngine.ProcessInboundMessageAsync(inbound);
 
@@ -970,11 +986,23 @@ namespace SmartSembakoAssistant.Services
             public string? Text { get; set; }
             public string? Caption { get; set; }
             public string? MediaUrl { get; set; }
+            public string? MediaMimeType { get; set; }
+            public string? FileName { get; set; }
             public string? MessageId { get; set; }
             public string? CorrelationId { get; set; }
             public DateTime? Timestamp { get; set; }
             public string? RawSenderJid { get; set; }
             public string? ResolvedSenderJid { get; set; }
+            public string? AppInstanceId { get; set; }
+            public string? MachineName { get; set; }
+            public string? UpsertType { get; set; }
+            public string? OriginalUpsertType { get; set; }
+            public DateTime? ReceivedAt { get; set; }
+            public long? MessageTimestampMs { get; set; }
+            public string? RemoteJid { get; set; }
+            public bool FromMe { get; set; }
+            public string? SidecarBuildTag { get; set; }
+            public DateTime? SidecarStartedAt { get; set; }
         }
     }
 }

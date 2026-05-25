@@ -76,6 +76,7 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 LoadOcrMappingsIntoConfig(legacyOcrMappings);
+                EnsureAppIdentity(saveIfChanged: true);
             }
             catch (Exception ex)
             {
@@ -92,6 +93,7 @@ namespace SmartSembakoAssistant.Services
         {
             try
             {
+                EnsureAppIdentity(saveIfChanged: false);
                 SaveOcrMappings(_config?.OcrReceipt?.ProductMappings);
 
                 // Buat salinan config untuk di-encrypt (jangan modify original)
@@ -216,6 +218,40 @@ namespace SmartSembakoAssistant.Services
             catch (Exception ex)
             {
                 throw new Exception($"Gagal menyimpan konfigurasi: {ex.Message}");
+            }
+        }
+
+        private void EnsureAppIdentity(bool saveIfChanged)
+        {
+            if (_config == null)
+            {
+                return;
+            }
+
+            bool changed = false;
+            _config.App ??= new AppSettings();
+            if (string.IsNullOrWhiteSpace(_config.App.InstanceId))
+            {
+                _config.App.InstanceId = Guid.NewGuid().ToString("N");
+                changed = true;
+            }
+
+            string machineName = Environment.MachineName;
+            if (!string.Equals(_config.App.MachineName, machineName, StringComparison.OrdinalIgnoreCase))
+            {
+                _config.App.MachineName = machineName;
+                changed = true;
+            }
+
+            if (_config.App.IsActiveBotRuntime && !_config.App.ActiveRuntimeSince.HasValue)
+            {
+                _config.App.ActiveRuntimeSince = DateTime.Now;
+                changed = true;
+            }
+
+            if (changed && saveIfChanged)
+            {
+                SaveConfig();
             }
         }
 
@@ -445,7 +481,7 @@ namespace SmartSembakoAssistant.Services
                                  _config?.Telegram?.BotToken != "YOUR_TELEGRAM_BOT_TOKEN";
             bool baileysReady = _config?.Baileys?.Enabled == true &&
                                 WhatsAppModes.UsesBaileys(waMode) &&
-                                !string.IsNullOrWhiteSpace(_config.Baileys.BotPhoneNumber) &&
+                                !IsPlaceholderPhone(_config.Baileys.BotPhoneNumber) &&
                                 (_config.Baileys.OwnerNumbers?.Any() == true);
             bool cloudReady = _config?.WhatsApp?.Enabled == true &&
                               WhatsAppModes.UsesCloudApi(waMode) &&
@@ -462,6 +498,11 @@ namespace SmartSembakoAssistant.Services
             if (Path.IsPathRooted(configPath))
             {
                 return configPath;
+            }
+
+            if (!RuntimePaths.IsPortableMode)
+            {
+                return RuntimePaths.ResolveWritablePath(configPath, configPath);
             }
 
             var existingCandidates = GetConfigCandidates(configPath);
@@ -629,7 +670,7 @@ namespace SmartSembakoAssistant.Services
                 if (config.Telegram?.OwnerChatIds?.Any() == true) score += 1;
                 if (!string.IsNullOrWhiteSpace(config.WhatsApp?.AccessToken)) score += 2;
                 if (!string.IsNullOrWhiteSpace(config.WhatsApp?.PhoneNumberId)) score += 1;
-                if (!string.IsNullOrWhiteSpace(config.Baileys?.BotPhoneNumber)) score += 2;
+                if (!IsPlaceholderPhone(config.Baileys?.BotPhoneNumber)) score += 2;
                 if (config.Baileys?.OwnerNumbers?.Any() == true) score += 1;
                 if (config.Setup?.SetupCompleted == true) score += 3;
 
@@ -658,6 +699,14 @@ namespace SmartSembakoAssistant.Services
             {
                 SaveOcrMappings(legacyOcrMappings);
             }
+        }
+
+        private static bool IsPlaceholderPhone(string? value)
+        {
+            string normalized = AutomationEngine.NormalizeWhatsAppNumber(value);
+            return string.IsNullOrWhiteSpace(normalized) ||
+                   normalized == "6281234567890" ||
+                   normalized == "6280000000000";
         }
 
         private List<OcrProductMapping> ReadOcrMappingsFromFile()

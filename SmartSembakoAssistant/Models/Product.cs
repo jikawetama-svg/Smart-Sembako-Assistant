@@ -34,6 +34,16 @@ namespace SmartSembakoAssistant.Models
                 return "🟢 Aman";
             }
         }
+        public string StockStatusText
+        {
+            get
+            {
+                if (!Stock.HasValue || Stock.Value < 0) return "Minus";
+                if (Stock.Value == 0) return "Habis";
+                if (Stock.Value <= 10) return "Rendah";
+                return "Aman";
+            }
+        }
     }
 
     public class Transaction
@@ -174,6 +184,17 @@ namespace SmartSembakoAssistant.Models
         public decimal Total { get; set; }
         public decimal PaidAmount { get; set; }
         public decimal OutstandingBalance { get; set; }
+        public int ItemCount { get; set; }
+    }
+
+    public class CustomerFavoriteProduct
+    {
+        public string? ProductId { get; set; }
+        public string? ProductName { get; set; }
+        public string? Unit { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal Total { get; set; }
+        public int TransactionCount { get; set; }
     }
 
     /// <summary>
@@ -318,6 +339,67 @@ namespace SmartSembakoAssistant.Models
         public decimal Revenue { get; set; }
         public decimal Profit { get; set; }
         public DateTime? LastSaleDate { get; set; }
+    }
+
+    public class SlowMovingProductInsight
+    {
+        public string? ProductId { get; set; }
+        public string? ProductName { get; set; }
+        public string? Unit { get; set; }
+        public string? Category { get; set; }
+        public decimal CurrentStock { get; set; }
+        public decimal QuantitySold { get; set; }
+        public decimal AverageCategoryQuantity { get; set; }
+        public DateTime? LastSaleDate { get; set; }
+        public DateTime? LastRestockDate { get; set; }
+        public decimal PercentVsCategory => AverageCategoryQuantity > 0
+            ? QuantitySold / AverageCategoryQuantity * 100
+            : 0;
+    }
+
+    public class StockMovementAnalysisSummary
+    {
+        public int SlowMovingCount { get; set; }
+        public int SlowMovingNegativeStockCount { get; set; }
+        public int DeadStockCount { get; set; }
+        public int SleepingMandatoryCount { get; set; }
+        public int SleepingObatCount { get; set; }
+        public int SleepingSembakoCount { get; set; }
+        public int SleepingBayiCount { get; set; }
+        public int UnmappedLargeUnitCount { get; set; }
+    }
+
+    public class PaymentBreakdownItem
+    {
+        public string PaymentTypeName { get; set; } = "";
+        public decimal Amount { get; set; }
+        public int TransactionCount { get; set; }
+    }
+
+    public class ZReportSummary
+    {
+        public string? Number { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    public class ProfitCalculationSummary
+    {
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+        public int TransactionCount { get; set; }
+        public decimal Revenue { get; set; }
+        public decimal CostOfGoodsSold { get; set; }
+        public decimal GrossProfit { get; set; }
+        public decimal MarginPercent => Revenue > 0 ? GrossProfit / Revenue * 100 : 0;
+    }
+
+    public class SupplierPurchaseSummary
+    {
+        public string? SupplierId { get; set; }
+        public string SupplierName { get; set; } = "";
+        public int PurchaseCount { get; set; }
+        public decimal TotalPurchase { get; set; }
+        public DateTime? LastPurchaseDate { get; set; }
     }
 
     public class ProductSalesTransaction

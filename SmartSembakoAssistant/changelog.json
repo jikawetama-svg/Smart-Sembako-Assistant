@@ -4,6 +4,31 @@
     "timezone": "UTC+07:00",
     "entries": [
         {
+            "date": "2026-05-25",
+            "version": "5.0.2",
+            "title": "Release Automation, Version Sync, and Build Safety",
+            "summary": [
+                "VERSION SSOT: changelog.json menjadi sumber kebenaran untuk versi aplikasi dan installer.",
+                "SYNC VERSION: Script Sync-Version.ps1 ditambahkan untuk menyelaraskan versi csproj dan Inno Setup dari changelog.",
+                "DYNAMIC VERSION UI: Sidebar aplikasi menampilkan versi dari assembly, bukan teks hardcoded.",
+                "GENERIC LICENSE: EULA dibuat versi-independen agar tidak perlu edit manual tiap rilis kecil.",
+                "GIT SAFETY: auto-commit.ps1 menambahkan guard untuk mencegah staging file rahasia, database lokal, dan biner besar.",
+                "GITHUB RELEASE: Script Publish-Release.ps1 ditambahkan untuk dry-run, build installer, tag git, dan rilis via GitHub CLI jika tersedia.",
+                "BUILD OPTIMIZATION: Build-Release.ps1 membaca versi otomatis dari changelog dan memakai PublishReadyToRun untuk startup WPF lebih cepat."
+            ],
+            "details": [
+                "File impact utama: changelog.json, .gitignore, auto-commit.ps1, SmartSembakoAssistant.csproj, MainWindow.xaml, MainWindow.xaml.cs, deployment/LICENSE.txt, deployment/SmartSembakoAssistant.iss, scripts/Sync-Version.ps1, scripts/Publish-Release.ps1, scripts/Build-Release.ps1.",
+                "Git safety guard memblokir config.json, .env, Google credentials JSON, data/*.db, data/baileys-session, cloudflared.exe root, dan file .exe di luar path vendor/runtime yang diizinkan.",
+                "Sync-Version.ps1 memperbarui Version, AssemblyVersion, FileVersion, dan #define MyAppVersion berdasarkan entri changelog aktif teratas.",
+                "Publish-Release.ps1 mendukung -DryRun untuk meninjau release notes tanpa commit, tag, push, build, atau upload GitHub.",
+                "Publish-Release.ps1 memperbaiki binding argumen git agar subcommand add, commit, tag, dan push tidak dipanggil kosong di Windows PowerShell.",
+                "Build-Release.ps1 tetap menerima -Version manual, tetapi fallback sekarang membaca changelog.json.",
+                "NuGet package Google.Apis.Sheets.v4 diselaraskan ke versi resolved 1.67.0.3393 agar build tidak lagi memunculkan warning NU1603.",
+                "Verification: dotnet build SmartSembakoAssistant.sln sukses dengan 0 error."
+            ],
+            "status": "draft"
+        },
+        {
             "date": "2026-05-20",
             "version": "5.0.1",
             "title": "Baileys Pairing Hardening, Runtime Bundling, and Pairing Failure Analysis",

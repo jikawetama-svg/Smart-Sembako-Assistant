@@ -22,9 +22,21 @@ namespace SmartSembakoAssistant.Models
         public string? SenderName { get; set; }
         public string Text { get; set; } = "";
         public string? MediaUrl { get; set; }
+        public string? MediaMimeType { get; set; }
+        public string? FileName { get; set; }
+        public string? RawSenderJid { get; set; }
+        public string? ResolvedSenderJid { get; set; }
         public string? MessageId { get; set; }
         public string? CorrelationId { get; set; }
         public string? PayloadHash { get; set; }
+        public string? AppInstanceId { get; set; }
+        public string? SourceAppInstanceId { get; set; }
+        public string? SourceMachineName { get; set; }
+        public string? UpsertType { get; set; }
+        public string? OriginalUpsertType { get; set; }
+        public DateTime? SidecarStartedAt { get; set; }
+        public DateTime? ReceivedAt { get; set; }
+        public long? MessageTimestampMs { get; set; }
         public DateTime Timestamp { get; set; } = DateTime.Now;
     }
 
@@ -35,12 +47,18 @@ namespace SmartSembakoAssistant.Models
         public string Text { get; set; } = "";
         public string ParseMode { get; set; } = "";
         public string? MediaUrl { get; set; }
+        public string? MenuKeyboardType { get; set; }
         public string MessageKind { get; set; } = "text";
         public string? TemplateName { get; set; }
         public string? TemplateLanguageCode { get; set; }
         public int TemplateBodyParameterCount { get; set; }
         public bool RequiresConfirmation { get; set; }
         public string? CorrelationId { get; set; }
+        public string? AppInstanceId { get; set; }
+        public string? SourceInboundMessageId { get; set; }
+        public DateTime? SourceInboundReceivedAt { get; set; }
+        public DateTime? ExpiresAt { get; set; }
+        public string OutboundSourceType { get; set; } = "manual_admin";
         public long QueueId { get; set; }
     }
 
@@ -118,7 +136,12 @@ namespace SmartSembakoAssistant.Models
         public string? BaileysConnectionState { get; set; }
         public int? BaileysLastDisconnectStatusCode { get; set; }
         public string? BaileysLastDisconnectReason { get; set; }
+        public string? BaileysSidecarBuildTag { get; set; }
         public DateTime? BaileysLastValidatedAt { get; set; }
+        public string? AppInstanceId { get; set; }
+        public string? MachineName { get; set; }
+        public DateTime? ActiveRuntimeSince { get; set; }
+        public string? LastIgnoredInboundReason { get; set; }
         public string? WhatsAppActionHint { get; set; }
         public string? BaileysActionHint { get; set; }
         public bool SignatureValidationEnabled { get; set; }
@@ -129,6 +152,7 @@ namespace SmartSembakoAssistant.Models
         public DateTime? PosDbLastValidatedAt { get; set; }
         public string? PosDbActionHint { get; set; }
         public int PendingOutboundCount { get; set; }
+        public int PendingWhatsAppLikeOutboundCount { get; set; }
         public string? TunnelPublicUrl { get; set; }
         public string? WhatsAppWebhookUrl { get; set; }
         public string? TunnelProvider { get; set; }
@@ -218,6 +242,8 @@ namespace SmartSembakoAssistant.Models
         public string ChildProductId { get; set; } = "";
         public string? ChildProductName { get; set; }
         public decimal ConversionRate { get; set; }
+        public string? FamilyName { get; set; }
+        public string? Notes { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
     }
@@ -231,6 +257,7 @@ namespace SmartSembakoAssistant.Models
         public string? MessageId { get; set; }
         public string CorrelationId { get; set; } = "";
         public string? PayloadHash { get; set; }
+        public string? AppInstanceId { get; set; }
         public string? Text { get; set; }
         public string Status { get; set; } = "received";
         public string? LastError { get; set; }
@@ -247,11 +274,13 @@ namespace SmartSembakoAssistant.Models
         public string Text { get; set; } = "";
         public string ParseMode { get; set; } = "";
         public string? MediaUrl { get; set; }
+        public string? MenuKeyboardType { get; set; }
         public string MessageKind { get; set; } = "text";
         public string? TemplateName { get; set; }
         public string? TemplateLanguageCode { get; set; }
         public int TemplateBodyParameterCount { get; set; }
         public bool RequiresConfirmation { get; set; }
+        public string? AppInstanceId { get; set; }
         public string Status { get; set; } = "queued";
         public int AttemptCount { get; set; }
         public DateTime NextAttemptAt { get; set; } = DateTime.Now;
@@ -260,6 +289,17 @@ namespace SmartSembakoAssistant.Models
         public string? ExternalMessageId { get; set; }
         public string? LastError { get; set; }
         public DateTime? LastStatusEventAt { get; set; }
+        public string? SourceInboundMessageId { get; set; }
+        public DateTime? SourceInboundReceivedAt { get; set; }
+        public DateTime? ExpiresAt { get; set; }
+        public string OutboundSourceType { get; set; } = "manual_admin";
+    }
+
+    public class OutboxCleanupResult
+    {
+        public int TotalCancelled { get; set; }
+        public int WhatsAppCancelled { get; set; }
+        public int BaileysCancelled { get; set; }
     }
 
     public class MessageStatusEventRecord
@@ -303,5 +343,18 @@ namespace SmartSembakoAssistant.Models
         public bool IsComplete { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.Now;
         public DateTime ExpiresAt { get; set; } = DateTime.Now.AddMinutes(30);
+    }
+
+    public class PendingInputState
+    {
+        public string Action { get; set; } = "";
+        public string? Context { get; set; }
+        public DateTime ExpiresAt { get; set; } = DateTime.Now.AddMinutes(5);
+
+        public static TimeSpan GetTimeout(string action) => action switch
+        {
+            "ocr_foto" or "input_struk" or "set_family" => TimeSpan.FromMinutes(10),
+            _ => TimeSpan.FromMinutes(5)
+        };
     }
 }

@@ -339,6 +339,8 @@ namespace SmartSembakoAssistant.Views
             BtnBrowseSheetsCredential.IsEnabled = sheetsEnabled;
             TxtSheetsSpreadsheetId.IsEnabled = sheetsEnabled;
             TxtSheetsPurchaseTabName.IsEnabled = sheetsEnabled;
+            BtnPrepareSheets.IsEnabled = sheetsEnabled;
+            BtnSyncSheetsDaily.IsEnabled = sheetsEnabled && _posDbService != null;
             BtnTestSheets.IsEnabled = sheetsEnabled;
 
             bool autoDetect = ChkAutoDetect.IsChecked == true;
@@ -1860,6 +1862,61 @@ namespace SmartSembakoAssistant.Views
             finally
             {
                 BtnTestSheets.IsEnabled = ChkSheetsEnabled.IsChecked == true;
+            }
+        }
+
+        private async void BtnPrepareSheets_Click(object sender, RoutedEventArgs e)
+        {
+            BtnPrepareSheets.IsEnabled = false;
+            try
+            {
+                var result = await RunWithDraftConfigAsync(async () =>
+                {
+                    var sheetsService = new GoogleSheetsService(_configService, _loggingService);
+                    var syncService = new GoogleSheetsSyncService(_configService, _loggingService, sheetsService, _posDbService);
+                    return await syncService.PreparePrioritySheetsAsync();
+                });
+
+                if (result.Success) ToastHelper.ShowSuccess("Google Sheets", result.Message);
+                else ToastHelper.ShowError("Google Sheets", result.Message);
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Google Sheets", ex.Message);
+            }
+            finally
+            {
+                BtnPrepareSheets.IsEnabled = ChkSheetsEnabled.IsChecked == true;
+            }
+        }
+
+        private async void BtnSyncSheetsDaily_Click(object sender, RoutedEventArgs e)
+        {
+            BtnSyncSheetsDaily.IsEnabled = false;
+            try
+            {
+                var result = await RunWithDraftConfigAsync(async () =>
+                {
+                    if (_posDbService == null)
+                    {
+                        return (Success: false, Message: "Database pos.db belum siap.");
+                    }
+
+                    var sheetsService = new GoogleSheetsService(_configService, _loggingService);
+                    var syncService = new GoogleSheetsSyncService(_configService, _loggingService, sheetsService, _posDbService);
+                    return await syncService.SyncDailySnapshotAsync(DateTime.Today);
+                });
+
+                if (result.Success) ToastHelper.ShowSuccess("Google Sheets", result.Message);
+                else ToastHelper.ShowError("Google Sheets", result.Message);
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Google Sheets", ex.Message);
+            }
+            finally
+            {
+                BtnSyncSheetsDaily.IsEnabled = ChkSheetsEnabled.IsChecked == true && _posDbService != null;
             }
         }
 

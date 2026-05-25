@@ -2,7 +2,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using SmartSembakoAssistant.Controls;
 using SmartSembakoAssistant.Helpers;
+using SmartSembakoAssistant.Models;
 using SmartSembakoAssistant.Services;
 
 namespace SmartSembakoAssistant.Views
@@ -50,6 +52,8 @@ namespace SmartSembakoAssistant.Views
         {
             try
             {
+                UpdateRuntimeDiagnostics(_botController?.GetIntegrationStatus());
+
                 if (_posDbService != null)
                 {
                     var revenue = await _posDbService.GetTodayRevenueAsync();
@@ -90,6 +94,7 @@ namespace SmartSembakoAssistant.Views
                 TxtIntegrationSummary.Text = integration == null
                     ? "Telegram, WhatsApp, webhook, dan outbox belum diinisialisasi."
                     : $"Mode WA: {integration.WhatsAppMode} | WA webhook: {(integration.WhatsAppRunning ? "aktif" : "mati")} | Cloud outbound: {(integration.WhatsAppCloudOutboundReady ? "siap kirim" : "belum siap")} | Baileys: {(integration.BaileysOutboundReady ? "siap kirim" : integration.BaileysConfigured ? "terputus/menunggu pairing" : "mati")} | Pairing: {(integration.BaileysPaired ? "terhubung" : integration.BaileysConfigured ? "menunggu pairing" : "-")} | Signature: {(integration.SignatureValidationEnabled ? "aktif" : "local/test")} | Outbox: {integration.PendingOutboundCount} | Last webhook: {FormatTimestamp(integration.LastWebhookReceivedAt)} | Last sent: {FormatTimestamp(integration.LastOutboundSentAt)}";
+                UpdateRuntimeDiagnostics(integration);
 
                 // Groq status - TEST API CALL dulu sebelum tampilkan "Connected"
                 var config = _configService.Config;
@@ -211,6 +216,72 @@ namespace SmartSembakoAssistant.Views
         public async Task LoadDataAsync()
         {
             LoadDashboardData();
+        }
+
+        private void UpdateRuntimeDiagnostics(IntegrationStatus? integration)
+        {
+            if (integration == null)
+            {
+                TxtRuntimeDiagnostics.Text = "Runtime belum aktif atau status belum tersedia.";
+                TxtWhatsAppDiagnostics.Text = "Pending WA/Baileys: - | Last ignored: - | Last outbound guard: -";
+                return;
+            }
+
+            TxtRuntimeDiagnostics.Text =
+                $"Instance: {integration.AppInstanceId ?? "-"} | Machine: {integration.MachineName ?? "-"} | Active since: {FormatTimestamp(integration.ActiveRuntimeSince)} | Sidecar build: {integration.BaileysSidecarBuildTag ?? "-"}";
+
+            string ownerWarning = BuildOwnerWarning();
+            TxtWhatsAppDiagnostics.Text =
+                $"Pending WA/Baileys: {integration.PendingWhatsAppLikeOutboundCount} | Last ignored: {integration.LastIgnoredInboundReason ?? "-"} | Last outbound guard: {integration.LastFailureMessage ?? "-"}{ownerWarning}";
+        }
+
+        private string BuildOwnerWarning()
+        {
+            var config = _configService.Config;
+            string mode = WhatsAppModes.Normalize(config?.WhatsApp?.Mode);
+            bool baileysActive = config?.Baileys?.Enabled == true && WhatsAppModes.UsesBaileys(mode);
+            bool setupCompleted = config?.Setup?.SetupCompleted == true;
+            bool hasBaileysPrincipals =
+                (config?.Baileys?.OwnerNumbers?.Any(n => !string.IsNullOrWhiteSpace(n)) == true) ||
+                (config?.Baileys?.KasirNumbers?.Any(n => !string.IsNullOrWhiteSpace(n)) == true);
+
+            return baileysActive && setupCompleted && !hasBaileysPrincipals
+                ? " | Warning: owner/kasir Baileys kosong"
+                : string.Empty;
+        }
+
+        private async void BtnClearPendingOutbox_Click(object sender, RoutedEventArgs e)
+        {
+            var confirm = MessageBox.Show(
+                "Batalkan semua pending/retry WhatsApp dan Baileys? Pesan yang sudah sent tidak dihapus.",
+                "Clear Pending WA Outbox",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            BtnClearPendingOutbox.IsEnabled = false;
+            try
+            {
+                string reason = $"manual_clear_pending_outbox: dibatalkan dari dashboard oleh user pada {DateTime.Now:O}.";
+                var result = await _databaseService.CancelPendingWhatsAppLikeOutboxAsync(reason);
+                await _loggingService.LogWarningAsync(
+                    $"Manual clear outbox: {result.TotalCancelled} pending dibatalkan. WhatsApp={result.WhatsAppCancelled}, Baileys={result.BaileysCancelled}.",
+                    "OutboundGuard");
+                ToastHelper.ShowSuccess("Outbox", $"{result.TotalCancelled} pending WA/Baileys dibatalkan.", Window.GetWindow(this));
+                LoadDashboardData();
+            }
+            catch (Exception ex)
+            {
+                await _loggingService.LogErrorAsync($"Manual clear outbox gagal: {ex.Message}", "OutboundGuard", ex.ToString());
+                ToastHelper.ShowError("Outbox", ex.Message, Window.GetWindow(this));
+            }
+            finally
+            {
+                BtnClearPendingOutbox.IsEnabled = true;
+            }
         }
 
         private static string FormatTimestamp(DateTime? value)

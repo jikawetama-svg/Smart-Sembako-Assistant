@@ -1,11 +1,13 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const pino = require("pino");
 const QRCode = require("qrcode");
 const {
   default: makeWASocket,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   isLidUser,
   jidDecode,
@@ -14,15 +16,23 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const logger = pino({ level: process.env.SSA_LOG_LEVEL || "info" });
+const sidecarBuildTag = "baileys-sidecar-2026-05-22-upsert-empty-replay-guard";
 
 const port = Number.parseInt(process.env.SSA_LOCAL_API_PORT || "8091", 10);
 const sessionPath = path.resolve(process.env.SSA_SESSION_PATH || path.join(process.cwd(), "session"));
+const mediaPath = path.resolve(process.env.SSA_MEDIA_PATH || path.join(path.dirname(sessionPath), "baileys-media"));
 const desktopInboundUrl = process.env.SSA_DESKTOP_INBOUND_URL || "http://localhost:8090/baileys/events/inbound";
 const pairingCodeTtlMs = Math.max(30, Number.parseInt(process.env.SSA_PAIRING_CODE_TTL_SECONDS || "120", 10)) * 1000;
 const qrCodeTtlMs = Math.max(30, Number.parseInt(process.env.SSA_QR_CODE_TTL_SECONDS || "60", 10)) * 1000;
 const pairingRetryCooldownMs = Math.max(15, Number.parseInt(process.env.SSA_PAIRING_RETRY_COOLDOWN_SECONDS || "30", 10)) * 1000;
 const pairingRateLimitCooldownMs = Math.max(1, Number.parseInt(process.env.SSA_PAIRING_RATE_LIMIT_COOLDOWN_MINUTES || "2", 10)) * 60 * 1000;
 const maxPairingRequestsPerHour = Math.max(1, Number.parseInt(process.env.SSA_MAX_PAIRING_REQUESTS_PER_HOUR || "8", 10));
+const inboundStaleToleranceMs = Math.max(0, Number.parseInt(process.env.SSA_INBOUND_STALE_TOLERANCE_SECONDS || "120", 10)) * 1000;
+const startupGraceMs = Math.max(0, Number.parseInt(process.env.SSA_STARTUP_GRACE_SECONDS || "30", 10)) * 1000;
+const sidecarStartedAtMs = Date.now();
+const sidecarStartedAt = new Date(sidecarStartedAtMs).toISOString();
+const appInstanceId = process.env.SSA_APP_INSTANCE_ID || "";
+const machineName = process.env.SSA_MACHINE_NAME || os.hostname();
 const browserDescription = ["Chrome", "Windows", "10"];
 const authorizedPhones = parseAuthorizedPhones(process.env.SSA_AUTHORIZED_NUMBERS || "");
 
@@ -51,8 +61,13 @@ let lastDisconnectStatusCode = null;
 let lastDisconnectReason = null;
 let baileysVersion = null;
 let socketGeneration = 0;
+let shuttingDown = false;
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+const subscribedJids = new Set();
 
 fs.mkdirSync(sessionPath, { recursive: true });
+fs.mkdirSync(mediaPath, { recursive: true });
 
 async function bootSocket(force = false) {
   if (bootPromise && !force) {
@@ -70,7 +85,9 @@ async function bootSocket(force = false) {
 
     baileysVersion = version;
     connectionState = "connecting";
-    logger.info({ version, browser: browserDescription, sessionPath, generation }, "Booting Baileys socket");
+    subscribedJids.clear();
+    clearReconnectTimer();
+    logger.info({ version, browser: browserDescription, sessionPath, generation, sidecarBuildTag }, "Booting Baileys socket");
 
     const socket = makeWASocket({
       auth: state,
@@ -101,6 +118,7 @@ async function bootSocket(force = false) {
       if (update.connection === "open") {
         logger.info("Baileys socket connected");
         connected = true;
+        reconnectAttempt = 0;
         paired = true;
         pairingCode = null;
         pairingRequestedFor = null;
@@ -139,17 +157,9 @@ async function bootSocket(force = false) {
         if (pairingInProgress && !lastError) {
           lastError = lastDisconnectReason;
         }
-        if (statusCode !== DisconnectReason.loggedOut && !resetInProgress) {
-          setTimeout(() => {
-            if (generation !== socketGeneration) {
-              return;
-            }
-
-            bootSocket(true).catch((error) => {
-              lastError = error.message;
-            });
-          }, 3000);
-        } else if (!resetInProgress) {
+        if (shouldReconnect(statusCode) && !resetInProgress && !shuttingDown) {
+          scheduleReconnect(generation);
+        } else if (!resetInProgress && !shuttingDown) {
           paired = false;
           pairingCode = null;
           pairingRequestedFor = null;
@@ -162,13 +172,29 @@ async function bootSocket(force = false) {
       }
     });
 
-    socket.ev.on("messages.upsert", async ({ messages }) => {
+    socket.ev.on("messages.upsert", async ({ messages, type }) => {
       if (generation !== socketGeneration) {
+        return;
+      }
+
+      if (type !== "notify") {
+        logger.info({ type: type || "missing", count: messages?.length || 0 }, "Ignoring non-live Baileys message upsert");
         return;
       }
 
       for (const message of messages || []) {
         if (!message.message) {
+          continue;
+        }
+
+        if (isStaleInboundMessage(message)) {
+          logger.info({
+            messageId: message.key.id,
+            remoteJid: message.key.remoteJid,
+            timestamp: formatMessageTimestamp(message),
+            sidecarStartedAt,
+            toleranceMs: inboundStaleToleranceMs
+          }, "Ignoring stale Baileys inbound message");
           continue;
         }
 
@@ -182,23 +208,48 @@ async function bootSocket(force = false) {
           message.message.conversation ||
           message.message.extendedTextMessage?.text ||
           message.message.imageMessage?.caption ||
+          message.message.documentMessage?.caption ||
           message.message.videoMessage?.caption ||
           "";
+        const media = await downloadInboundMedia(message);
+
+        if (!text.trim() && !media.filePath) {
+          logger.info({
+            messageId: message.key.id,
+            remoteJid: message.key.remoteJid,
+            rawJid: sender.rawJid
+          }, "Ignoring empty or unsupported inbound message");
+          continue;
+        }
 
         const payload = {
           senderId: sender.senderId,
           senderName: message.pushName || "",
           text,
-          mediaUrl: null,
+          caption: media.caption || text,
+          mediaUrl: media.filePath,
+          mediaMimeType: media.mimeType,
+          fileName: media.fileName,
           messageId: message.key.id || "",
           rawSenderJid: sender.rawJid,
           resolvedSenderJid: sender.resolvedJid,
-          timestamp: message.messageTimestamp
-            ? new Date(Number(message.messageTimestamp) * 1000).toISOString()
-            : new Date().toISOString()
+          appInstanceId,
+          machineName,
+          sidecarBuildTag,
+          upsertType: "notify",
+          originalUpsertType: type || "",
+          sidecarStartedAt,
+          receivedAt: new Date().toISOString(),
+          messageTimestampMs: getMessageTimestampMs(message),
+          remoteJid: message.key.remoteJid || "",
+          fromMe: message.key.fromMe === true,
+          timestamp: formatMessageTimestamp(message) || new Date().toISOString()
         };
 
         try {
+          sendPresence(sender.senderId, "composing").catch((error) => {
+            logger.warn({ err: error, senderId: sender.senderId }, "Failed to send typing presence");
+          });
           await postJson(desktopInboundUrl, payload);
           lastError = null;
           logger.info({
@@ -206,6 +257,9 @@ async function bootSocket(force = false) {
             rawJid: sender.rawJid,
             resolvedJid: sender.resolvedJid,
             messageId: payload.messageId,
+            appInstanceId,
+            sidecarBuildTag,
+            mediaMimeType: payload.mediaMimeType || null,
             inboundUrl: desktopInboundUrl
           }, "Forwarded inbound message to desktop app");
         } catch (error) {
@@ -266,7 +320,11 @@ async function ensurePairingCode(phoneNumber) {
   try {
     recordPairingRequest();
     logger.info({ phoneNumber: normalized }, "Requesting new pairing code");
-    pairingCode = await sock.requestPairingCode(normalized);
+    pairingCode = await withTimeout(
+      sock.requestPairingCode(normalized),
+      30000,
+      "Pairing code request timeout. Coba generate kode lagi."
+    );
     pairingCodeCreatedAt = new Date().toISOString();
     pairingCodeExpiresAt = new Date(Date.now() + pairingCodeTtlMs).toISOString();
     lastError = null;
@@ -278,6 +336,19 @@ async function ensurePairingCode(phoneNumber) {
   } finally {
     pairingRequestLock = false;
   }
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(createStructuredError("timeout", message, 30)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 async function ensureQrCode(resetSessionFirst = false) {
@@ -317,6 +388,84 @@ async function ensureQrCode(resetSessionFirst = false) {
 
   qrInProgress = false;
   throw createStructuredError("qr-timeout", "QR pairing belum tersedia. Reset sesi lokal lalu coba QR lagi.", 30);
+}
+
+function shouldReconnect(statusCode) {
+  return statusCode !== DisconnectReason.loggedOut &&
+         statusCode !== DisconnectReason.forbidden &&
+         statusCode !== 403;
+}
+
+function getReconnectDelayMs() {
+  reconnectAttempt += 1;
+  if (reconnectAttempt === 1) {
+    return 3000;
+  }
+  if (reconnectAttempt === 2) {
+    return 6000;
+  }
+  if (reconnectAttempt === 3) {
+    return 12000;
+  }
+  if (reconnectAttempt === 4) {
+    return 30000;
+  }
+
+  return 60000;
+}
+
+function scheduleReconnect(generation) {
+  clearReconnectTimer();
+  const delayMs = getReconnectDelayMs();
+  logger.warn({ reconnectAttempt, delayMs }, "Scheduling Baileys reconnect with backoff");
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (generation !== socketGeneration || shuttingDown || resetInProgress) {
+      return;
+    }
+
+    bootSocket(true).catch((error) => {
+      lastError = error.message;
+    });
+  }, delayMs);
+}
+
+function clearReconnectTimer() {
+  if (!reconnectTimer) {
+    return;
+  }
+
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function getMessageTimestampMs(message) {
+  if (!message?.messageTimestamp) {
+    return Date.now();
+  }
+
+  const seconds = Number(message.messageTimestamp);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return Date.now();
+  }
+
+  return seconds * 1000;
+}
+
+function formatMessageTimestamp(message) {
+  const timestampMs = getMessageTimestampMs(message);
+  return Number.isFinite(timestampMs)
+    ? new Date(timestampMs).toISOString()
+    : null;
+}
+
+function isStaleInboundMessage(message) {
+  const timestampMs = getMessageTimestampMs(message);
+  if (Date.now() < sidecarStartedAtMs + startupGraceMs && timestampMs <= sidecarStartedAtMs) {
+    return true;
+  }
+
+  return timestampMs < sidecarStartedAtMs - inboundStaleToleranceMs;
 }
 
 function pruneExpiredPairingCode() {
@@ -410,6 +559,8 @@ async function resetSession() {
   clearQrCode();
   paired = false;
   connected = false;
+  reconnectAttempt = 0;
+  clearReconnectTimer();
   lastError = null;
   pairingInProgress = false;
   connectionState = "resetting";
@@ -419,6 +570,14 @@ async function resetSession() {
   try {
     const activeSocket = sock;
     sock = null;
+    if (activeSocket?.logout) {
+      try {
+        await activeSocket.logout();
+      } catch (error) {
+        logger.warn({ err: error }, "Failed to logout socket before reset; continuing local session cleanup");
+      }
+    }
+
     if (activeSocket?.end) {
       try {
         activeSocket.end(new Error("Manual session reset"));
@@ -427,6 +586,7 @@ async function resetSession() {
       }
     }
 
+    subscribedJids.clear();
     if (fs.existsSync(sessionPath)) {
       fs.rmSync(sessionPath, { recursive: true, force: true });
     }
@@ -473,6 +633,88 @@ async function postJson(url, payload) {
     req.write(body);
     req.end();
   });
+}
+
+async function downloadInboundMedia(message) {
+  const image = message.message?.imageMessage || null;
+  const document = message.message?.documentMessage || null;
+  const documentMime = document?.mimetype || "";
+  const isImageDocument = document && /^image\//i.test(documentMime);
+  const mediaMessage = image || (isImageDocument ? document : null);
+
+  if (!mediaMessage) {
+    return {
+      filePath: null,
+      mimeType: null,
+      fileName: null,
+      caption: null
+    };
+  }
+
+  try {
+    const buffer = await downloadMediaMessage(message, "buffer", {}, { logger });
+    if (!buffer || buffer.length === 0) {
+      throw new Error("Downloaded media buffer is empty.");
+    }
+
+    const mimeType = mediaMessage.mimetype || "image/jpeg";
+    const extension = inferExtension(mimeType, document?.fileName);
+    const fileName = sanitizeFileName(document?.fileName) || `wa_${Date.now()}_${message.key.id || "media"}${extension}`;
+    const filePath = path.join(mediaPath, fileName);
+    fs.writeFileSync(filePath, buffer);
+    logger.info({
+      fileName,
+      filePath,
+      mimeType,
+      size: buffer.length,
+      messageId: message.key.id
+    }, "Downloaded inbound media");
+
+    return {
+      filePath,
+      mimeType,
+      fileName,
+      caption: mediaMessage.caption || null
+    };
+  } catch (error) {
+    lastError = error.message;
+    logger.error({ err: error, messageId: message.key.id }, "Failed to download inbound media");
+    return {
+      filePath: null,
+      mimeType: null,
+      fileName: null,
+      caption: mediaMessage.caption || null
+    };
+  }
+}
+
+function inferExtension(mimeType, originalName) {
+  const originalExtension = path.extname(originalName || "");
+  if (originalExtension) {
+    return originalExtension;
+  }
+
+  switch ((mimeType || "").toLowerCase()) {
+    case "image/png":
+      return ".png";
+    case "image/webp":
+      return ".webp";
+    case "image/heic":
+      return ".heic";
+    case "image/heif":
+      return ".heif";
+    default:
+      return ".jpg";
+  }
+}
+
+function sanitizeFileName(value) {
+  if (!value) {
+    return "";
+  }
+
+  const baseName = path.basename(value.toString()).replace(/[^a-zA-Z0-9._-]/g, "_");
+  return baseName.length > 160 ? baseName.slice(-160) : baseName;
 }
 
 function normalizePhone(value) {
@@ -570,10 +812,123 @@ async function sendMessage(recipient, text) {
     throw new Error("Socket belum siap.");
   }
 
+  if (!connected) {
+    throw createStructuredError("not-ready", "WhatsApp lokal belum tersambung.");
+  }
+
   const jid = `${normalizePhone(recipient)}@s.whatsapp.net`;
   const response = await sock.sendMessage(jid, { text });
+  try {
+    await sock.sendPresenceUpdate("paused", jid);
+  } catch (error) {
+    logger.warn({ err: error, recipient: normalizePhone(recipient) }, "Failed to pause typing presence after send");
+  }
   lastSeen = new Date().toISOString();
   return response?.key?.id || null;
+}
+
+async function sendDocument(recipient, filePath, fileName, mimeType, caption) {
+  if (!sock) {
+    throw new Error("Socket belum siap.");
+  }
+
+  if (!connected) {
+    throw createStructuredError("not-ready", "WhatsApp lokal belum tersambung.");
+  }
+
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw createStructuredError("missing-file", "File dokumen tidak ditemukan.");
+  }
+
+  const stat = fs.statSync(filePath);
+  const maxBytes = 64 * 1024 * 1024;
+  if (stat.size > maxBytes) {
+    throw createStructuredError("file-too-large", "File terlalu besar untuk WhatsApp.", 0);
+  }
+
+  const jid = `${normalizePhone(recipient)}@s.whatsapp.net`;
+  const resolvedFileName = sanitizeFileName(fileName) || path.basename(filePath);
+  const response = await sock.sendMessage(jid, {
+    document: fs.readFileSync(filePath),
+    fileName: resolvedFileName,
+    mimetype: mimeType || inferDocumentMimeType(filePath),
+    caption: caption || ""
+  });
+
+  lastSeen = new Date().toISOString();
+  logger.info({
+    recipient: normalizePhone(recipient),
+    fileName: resolvedFileName,
+    size: stat.size,
+    messageId: response?.key?.id || null
+  }, "Sent outbound document");
+  return response?.key?.id || null;
+}
+
+async function sendPresence(recipient, type = "composing") {
+  if (!sock || !connected) {
+    return false;
+  }
+
+  const normalized = normalizePhone(recipient);
+  if (!normalized) {
+    return false;
+  }
+
+  const jid = `${normalized}@s.whatsapp.net`;
+  if (!subscribedJids.has(jid)) {
+    await sock.presenceSubscribe(jid);
+    subscribedJids.add(jid);
+  }
+
+  await sock.sendPresenceUpdate(type, jid);
+  lastSeen = new Date().toISOString();
+  return true;
+}
+
+async function shutdownGracefully() {
+  shuttingDown = true;
+  socketGeneration += 1;
+  connectionState = "closing";
+  clearReconnectTimer();
+  subscribedJids.clear();
+  const activeSocket = sock;
+  sock = null;
+
+  if (activeSocket?.sendPresenceUpdate) {
+    try {
+      await activeSocket.sendPresenceUpdate("unavailable");
+    } catch (error) {
+      logger.warn({ err: error }, "Failed to send unavailable presence during shutdown");
+    }
+  }
+
+  if (activeSocket?.end) {
+    try {
+      activeSocket.end(new Error("Desktop app stopped Baileys sidecar"));
+    } catch (error) {
+      logger.warn({ err: error }, "Failed to close socket gracefully during shutdown");
+    }
+  }
+}
+
+function inferDocumentMimeType(filePath) {
+  switch (path.extname(filePath || "").toLowerCase()) {
+    case ".csv":
+      return "text/csv";
+    case ".zip":
+      return "application/zip";
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case ".xls":
+      return "application/vnd.ms-excel";
+    case ".pdf":
+      return "application/pdf";
+    case ".txt":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function readStatus() {
@@ -598,9 +953,30 @@ function readStatus() {
     lastDisconnectReason,
     lastSeen,
     sessionPath,
+    sidecarBuildTag,
+    sidecarStartedAt,
+    appInstanceId,
+    machineName,
     baileysVersion,
     browser: browserDescription,
     error: lastError
+  };
+}
+
+function readBotStatus() {
+  return {
+    instanceId: appInstanceId,
+    machineName,
+    connected,
+    paired,
+    sidecarBuildTag,
+    sidecarStartedAt,
+    pendingOutboundCount: 0,
+    reconnectAttempt,
+    subscribedJidCount: subscribedJids.size,
+    uptimeSeconds: Math.floor((Date.now() - sidecarStartedAtMs) / 1000),
+    connectionState,
+    lastError
   };
 }
 
@@ -665,8 +1041,23 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "GET" && req.url === "/status_bot") {
+        json(res, 200, readBotStatus());
+        return;
+      }
+
       if (req.method === "GET" && req.url === "/session/status") {
         json(res, 200, readStatus());
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/session/reconnect") {
+        await bootSocket(true);
+        json(res, 200, {
+          success: true,
+          message: "Baileys reconnect dipicu.",
+          connectionState
+        });
         return;
       }
 
@@ -725,6 +1116,46 @@ const server = http.createServer(async (req, res) => {
           message: "Pesan Baileys terkirim.",
           externalMessageId
         });
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/presence/typing") {
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const type = payload.paused === true ? "paused" : "composing";
+        const sent = await sendPresence(payload.recipient, type);
+        json(res, 200, {
+          success: true,
+          message: sent ? "Presence terkirim." : "Presence dilewati karena socket belum siap.",
+          connectionState
+        });
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/messages/send-document") {
+        const payload = rawBody ? JSON.parse(rawBody) : {};
+        const externalMessageId = await sendDocument(
+          payload.recipient,
+          payload.filePath,
+          payload.fileName,
+          payload.mimeType,
+          payload.caption
+        );
+        json(res, 200, {
+          success: true,
+          message: "Dokumen Baileys terkirim.",
+          externalMessageId
+        });
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/shutdown") {
+        await shutdownGracefully();
+        json(res, 200, {
+          success: true,
+          message: "Baileys sidecar shutdown started."
+        });
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(0), 1000).unref();
         return;
       }
 

@@ -540,6 +540,8 @@
                     <TextBox x:Name="TxtSheetsPurchaseTabName" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnPrepareSheets" Content="Prepare Sheets" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnPrepareSheets_Click"/>
+                        <Button x:Name="BtnSyncSheetsDaily" Content="Sync Daily Snapshot" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnSyncSheetsDaily_Click"/>
                         <Button x:Name="BtnTestSheets" Content="Test Koneksi Sheets" Style="{StaticResource SmallButtonStyle}" Click="BtnTestSheets_Click"/>
                     </StackPanel>
 

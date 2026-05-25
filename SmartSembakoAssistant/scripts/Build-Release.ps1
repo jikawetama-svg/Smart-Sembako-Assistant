@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-x64",
-    [string]$Version = "1.0.0",
+    [string]$Version = "",
     [string]$InnoCompilerPath = "",
     [string]$NodeRuntimeSourceDir = "",
     [string]$NodeBinaryPath = "",
@@ -20,6 +20,7 @@ $stagingRoot = Join-Path $artifactsRoot "staging"
 $publishDir = Join-Path $stagingRoot "publish\$RuntimeIdentifier"
 $installerScript = Join-Path $projectRoot "deployment\SmartSembakoAssistant.iss"
 $installerOutDir = Join-Path $artifactsRoot "installer"
+$changelogPath = Join-Path $projectRoot "changelog.json"
 
 function Write-Step {
     param([string]$Message)
@@ -40,6 +41,28 @@ function Write-Info {
     Write-Host "    $Message" -ForegroundColor DarkGray
 }
 
+function Get-LatestChangelogVersion {
+    if (!(Test-Path -LiteralPath $changelogPath)) {
+        throw "Parameter -Version kosong dan changelog.json tidak ditemukan: $changelogPath"
+    }
+
+    $changelog = Get-Content -LiteralPath $changelogPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $entry = $changelog.entries |
+        Where-Object { $_.version -and $_.version -ne "unreleased" -and $_.status -in @("draft", "implemented", "released") } |
+        Select-Object -First 1
+
+    if (!$entry) {
+        throw "Parameter -Version kosong dan changelog.json tidak memiliki entry aktif dengan version valid."
+    }
+
+    $clean = $entry.version.Trim().TrimStart("v", "V")
+    if ($clean -notmatch "^\d+\.\d+\.\d+$") {
+        throw "Versi changelog tidak valid: $($entry.version)"
+    }
+
+    return $clean
+}
+
 function Reset-Directory {
     param([string]$Path)
 
@@ -55,8 +78,6 @@ function Initialize-CleanRuntimeLayout {
 
     $configFile = Join-Path $Root "config.json"
     $dataDir = Join-Path $Root "data"
-    $logsDir = Join-Path $dataDir "logs"
-    $sessionDir = Join-Path $dataDir "baileys-session"
     $portableMarker = Join-Path $Root "portable.mode"
 
     foreach ($path in @($configFile, $portableMarker)) {
@@ -68,9 +89,6 @@ function Initialize-CleanRuntimeLayout {
     if (Test-Path -LiteralPath $dataDir) {
         Remove-Item -LiteralPath $dataDir -Recurse -Force
     }
-
-    New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
-    New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
 }
 
 function Resolve-InnoCompiler {
@@ -247,7 +265,8 @@ function Assert-ReleasePayload {
         "Integrations\BaileysSidecar\package.json",
         "Integrations\BaileysSidecar\package-lock.json",
         "Integrations\BaileysSidecar\node_modules\@whiskeysockets\baileys\package.json",
-        "Integrations\BaileysSidecar\node_modules\pino\package.json"
+        "Integrations\BaileysSidecar\node_modules\pino\package.json",
+        "tessdata\ind.traineddata"
     )
 
     foreach ($relative in $requiredFiles) {
@@ -257,12 +276,68 @@ function Assert-ReleasePayload {
         }
     }
 
+    $forbiddenPaths = @(
+        "config.json",
+        "data",
+        "memory.db",
+        "ocr_mappings.json",
+        "AIChatError.log",
+        "Tempt"
+    )
+
+    foreach ($relative in $forbiddenPaths) {
+        $path = Join-Path $Root $relative
+        if (Test-Path -LiteralPath $path) {
+            throw "Payload installer mengandung data runtime/debug terlarang: $relative"
+        }
+    }
+
+    $forbiddenPatterns = @("*.db", "*.log")
+    foreach ($pattern in $forbiddenPatterns) {
+        $matches = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue
+        if ($matches) {
+            $first = $matches | Select-Object -First 1
+            throw "Payload installer mengandung file runtime/debug terlarang: $($first.FullName.Substring($Root.Length).TrimStart('\'))"
+        }
+    }
+
+    $forbiddenSensitivePatterns = @(
+        "*.env",
+        "*credentials*.json",
+        "*service-account*.json",
+        "automation-sheets-*.json",
+        "*-b2b070766971.json"
+    )
+
+    foreach ($pattern in $forbiddenSensitivePatterns) {
+        $matches = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue
+        if ($matches) {
+            $first = $matches | Select-Object -First 1
+            throw "Payload installer mengandung file sensitif terlarang: $($first.FullName.Substring($Root.Length).TrimStart('\'))"
+        }
+    }
+
+    $forbiddenNames = @("ocr_mappings.json", "baileys-session", "logs")
+    foreach ($name in $forbiddenNames) {
+        $matches = Get-ChildItem -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ieq $name }
+        if ($matches) {
+            $first = $matches | Select-Object -First 1
+            throw "Payload installer mengandung item runtime/debug terlarang: $($first.FullName.Substring($Root.Length).TrimStart('\'))"
+        }
+    }
+
     Write-Ok "Payload installer lengkap"
 }
 
 try {
     Write-Host "Smart Sembako Assistant - Release Builder" -ForegroundColor White
     Write-Info "Output rilis dibuat sebagai installer .exe saja. Paket portable/zip tidak dibuat."
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        $Version = Get-LatestChangelogVersion
+        Write-Ok "Versi otomatis dari changelog.json: $Version"
+    }
 
     Assert-FileExists -Path $projectFile -Label "Project file"
     Assert-FileExists -Path $installerScript -Label "Inno Setup script"
@@ -288,6 +363,7 @@ try {
         -r $RuntimeIdentifier `
         --self-contained true `
         /p:PublishSingleFile=false `
+        /p:PublishReadyToRun=true `
         /p:DebugType=None `
         /p:DebugSymbols=false `
         -o $publishDir

@@ -15,20 +15,29 @@ namespace SmartSembakoAssistant
         private readonly DatabaseService _databaseService;
         private readonly LoggingService _loggingService;
         private readonly SetupReadinessService _setupReadinessService;
+        private readonly ExportService _exportService;
         private PosDbService? _posDbService;
         private BotController? _botController;
         private DispatcherTimer? _uptimeTimer;
         private DispatcherTimer? _dateTimeTimer;
+        private DashboardView? _dashboardView;
+        private StockMonitoringView? _stockMonitoringView;
+        private SalesAnalyticsView? _salesView;
+        private AIChatView? _aiChatView;
+        private LogsView? _logsView;
+        private SettingsView? _settingsView;
 
         public MainWindow()
         {
             InitializeComponent();
+            SetDynamicAppVersion();
 
             // Initialize services
             _configService = new ConfigService();
             _databaseService = new DatabaseService();
             _loggingService = new LoggingService(_databaseService);
             _setupReadinessService = new SetupReadinessService(_configService);
+            _exportService = new ExportService(_loggingService);
             _setupReadinessService.SeedDefaults();
 
             // Initialize PosDbService
@@ -57,6 +66,15 @@ namespace SmartSembakoAssistant
             else
             {
                 LoadDashboard();
+            }
+        }
+
+        private void SetDynamicAppVersion()
+        {
+            var assemblyVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            if (assemblyVersion != null)
+            {
+                TxtAppVersion.Text = $"Assistant v{assemblyVersion.Major}.{assemblyVersion.Minor}.{assemblyVersion.Build}";
             }
         }
 
@@ -106,6 +124,7 @@ namespace SmartSembakoAssistant
                     _loggingService,
                     _posDbService);
                 _botController.OnStateChanged += BotController_OnStateChanged;
+                ClearViewCache();
 
                 if (MainContent.Content is DashboardView dashboard)
                 {
@@ -246,16 +265,16 @@ namespace SmartSembakoAssistant
 
         private void BtnAnalytics_Click(object sender, RoutedEventArgs e)
         {
-            UpdatePageTitle("Sales Analytics");
+            UpdatePageTitle("Penjualan");
             SetActiveButton(BtnAnalytics);
             LoadAnalytics();
         }
 
         private void BtnReports_Click(object sender, RoutedEventArgs e)
         {
-            UpdatePageTitle("Reports & Analytics");
-            SetActiveButton(BtnReports);
-            LoadReports();
+            UpdatePageTitle("Penjualan");
+            SetActiveButton(BtnAnalytics);
+            LoadAnalytics();
         }
 
         private void BtnAIChat_Click(object sender, RoutedEventArgs e)
@@ -536,6 +555,10 @@ namespace SmartSembakoAssistant
             {
                 await stock.LoadDataAsync();
             }
+            else if (currentPage is SalesAnalyticsView sales)
+            {
+                await sales.LoadDataAsync();
+            }
             else if (currentPage is LogsView logs)
             {
                 await logs.LoadDataAsync();
@@ -597,14 +620,14 @@ namespace SmartSembakoAssistant
         // Page Loaders
         private void LoadDashboard()
         {
-            var dashboardView = new DashboardView(
+            _dashboardView ??= new DashboardView(
                 _configService,
                 _databaseService,
                 _loggingService,
                 _posDbService,
                 _botController);
 
-            MainContent.Content = dashboardView;
+            MainContent.Content = _dashboardView;
         }
 
         private void LoadSetupWizard()
@@ -641,65 +664,81 @@ namespace SmartSembakoAssistant
 
         private void LoadMonitoring()
         {
-            var monitoringView = new StockMonitoringView(
+            _stockMonitoringView ??= new StockMonitoringView(
                 _configService,
                 _databaseService,
                 _loggingService,
                 _posDbService);
 
-            MainContent.Content = monitoringView;
+            MainContent.Content = _stockMonitoringView;
         }
 
         private void LoadLogs()
         {
-            var logsView = new LogsView(
+            _logsView ??= new LogsView(
                 _databaseService,
                 _loggingService);
 
-            MainContent.Content = logsView;
+            MainContent.Content = _logsView;
         }
 
         private void LoadSettings()
         {
-            var settingsView = new SettingsView(
+            _settingsView ??= new SettingsView(
                 _configService,
                 _posDbService);
 
-            MainContent.Content = settingsView;
+            MainContent.Content = _settingsView;
         }
 
         private void LoadAnalytics()
         {
-            var analyticsView = new SalesAnalyticsView(
+            _salesView ??= new SalesAnalyticsView(
                 _configService,
                 _databaseService,
                 _loggingService,
-                _posDbService);
+                _posDbService,
+                _exportService);
 
-            MainContent.Content = analyticsView;
+            MainContent.Content = _salesView;
         }
 
         private void LoadReports()
         {
             var reportsView = new ReportsView(
                 _loggingService,
-                _posDbService);
+                _posDbService,
+                _exportService);
 
             MainContent.Content = reportsView;
         }
 
         private void LoadAIChat()
         {
-            var groqService = new GroqService(_configService, _loggingService);
+            if (_aiChatView == null)
+            {
+                var groqService = new GroqService(_configService, _loggingService);
 
-            var aiChatView = new AIChatView(
-                _configService,
-                _databaseService,
-                _loggingService,
-                _posDbService,
-                groqService);
+                _aiChatView = new AIChatView(
+                    _configService,
+                    _databaseService,
+                    _loggingService,
+                    _posDbService,
+                    groqService,
+                    _exportService);
+            }
 
-            MainContent.Content = aiChatView;
+            MainContent.Content = _aiChatView;
+        }
+
+        private void ClearViewCache()
+        {
+            _dashboardView = null;
+            _stockMonitoringView = null;
+            _salesView = null;
+            _aiChatView = null;
+            _logsView = null;
+            _settingsView = null;
         }
 
         protected override void OnClosing(CancelEventArgs e)

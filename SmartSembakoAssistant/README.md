@@ -5,8 +5,6 @@ Smart Sembako Assistant adalah desktop automation engine WPF .NET 8 untuk toko s
 ## Dokumen utama
 - [SETTINGS_GUIDE.md](SETTINGS_GUIDE.md)  
   Panduan cepat wizard, pengisian Settings, pairing code Baileys, API key, token, webhook, dan tunnel.
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)  
-  Status jujur fitur yang sudah jalan, parsial, placeholder, dan blocked by config.
 - [QUICK_START.md](QUICK_START.md)  
   Langkah singkat build, run, save config, test, dan start bot.
 - [TECHNICAL_DOCS.md](TECHNICAL_DOCS.md)  
@@ -32,6 +30,8 @@ Smart Sembako Assistant adalah desktop automation engine WPF .NET 8 untuk toko s
 - Persistent outbox, inbound dedupe, runtime state SQLite, dan observability dasar.
 - Tunnel manager desktop-first untuk webhook WhatsApp.
 - Settings UI dengan draft state, test button non-destructive, dan show/hide secret yang aman.
+- OCR struk pembelian dengan review queue.
+- Google Sheets export untuk tab prioritas laporan owner.
 
 ## Mode WhatsApp
 - `CloudApi`: mode resmi Meta Graph API.
@@ -50,4 +50,4 @@ dotnet run --project SmartSembakoAssistant\SmartSembakoAssistant.csproj
 - Pairing code muncul otomatis di wizard dan juga bisa digenerate ulang dari `Settings`.
 - Dashboard Meta Developers yang Anda pakai adalah jalur resmi untuk Cloud API, tetapi tetap perlu `Access Token`, `Phone Number ID`, `Verify Token`, `App Secret`, dan subscription webhook yang benar.
 - Baileys disediakan sebagai opsi lokal tambahan dan bukan WhatsApp Business API resmi.
-- OCR, Google Sheets, voice note, dan scheduler lanjutan belum selesai.
+- Voice note masih fitur lanjutan; OCR, Google Sheets, dan scheduler dasar sudah tersedia lewat flow aplikasi.

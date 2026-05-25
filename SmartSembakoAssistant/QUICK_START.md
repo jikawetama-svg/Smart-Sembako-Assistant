@@ -33,7 +33,7 @@ Isi hanya data inti:
 - Jika belum penuh aktif, cek:
   - `Dashboard`
   - `Settings`
-  - `IMPLEMENTATION_STATUS.md`
+  - `TECHNICAL_DOCS.md`
 
 ## Jika ingin Cloud API resmi
 - Buka `Settings`.

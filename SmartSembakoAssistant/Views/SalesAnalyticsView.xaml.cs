@@ -1,10 +1,7 @@
-using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Linq;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Win32;
 using SmartSembakoAssistant.Controls;
 using SmartSembakoAssistant.Models;
 using SmartSembakoAssistant.Services;
@@ -17,16 +14,23 @@ namespace SmartSembakoAssistant.Views
         private readonly DatabaseService _databaseService;
         private readonly LoggingService _loggingService;
         private readonly PosDbService? _posDbService;
+        private readonly ExportService _exportService;
 
         private ObservableCollection<ProductSales> _topProducts = new();
         private ObservableCollection<DailySalesData> _dailySalesData = new();
+        private ObservableCollection<ReportRow> _reportRows = new();
+        private List<ReportRow> _allReportRows = new();
+        private List<SalesLineItem> _allSalesLineItems = new();
+        private CancellationTokenSource? _loadCts;
         private string _selectedPeriod = "today";
+        private bool _hasLoaded;
 
         public SalesAnalyticsView(
             ConfigService configService,
             DatabaseService databaseService,
             LoggingService loggingService,
-            PosDbService? posDbService)
+            PosDbService? posDbService,
+            ExportService exportService)
         {
             InitializeComponent();
 
@@ -34,274 +38,356 @@ namespace SmartSembakoAssistant.Views
             _databaseService = databaseService;
             _loggingService = loggingService;
             _posDbService = posDbService;
+            _exportService = exportService;
 
             DgTopProducts.ItemsSource = _topProducts;
             IcSalesChart.ItemsSource = _dailySalesData;
+            DgReports.ItemsSource = _reportRows;
 
-            // Set default date values
             DpStartDate.SelectedDate = DateTime.Today;
             DpEndDate.SelectedDate = DateTime.Today;
 
-            LoadAnalytics();
+            Loaded += async (_, _) =>
+            {
+                if (!_hasLoaded)
+                {
+                    _hasLoaded = true;
+                    await LoadSalesAsync();
+                }
+            };
         }
 
-        // Period selector handlers
-        private void BtnToday_Click(object sender, RoutedEventArgs e)
+        private async void BtnToday_Click(object sender, RoutedEventArgs e)
         {
             _selectedPeriod = "today";
+            DpStartDate.SelectedDate = DateTime.Today;
+            DpEndDate.SelectedDate = DateTime.Today;
             UpdatePeriodButtonStyles(BtnToday);
-            PanelCustomDate.Visibility = Visibility.Collapsed;
-            LoadAnalytics();
+            await LoadSalesAsync();
         }
 
-        private void BtnThisWeek_Click(object sender, RoutedEventArgs e)
+        private async void BtnThisWeek_Click(object sender, RoutedEventArgs e)
         {
             _selectedPeriod = "week";
+            var today = DateTime.Today;
+            var offset = ((int)today.DayOfWeek + 6) % 7;
+            DpStartDate.SelectedDate = today.AddDays(-offset);
+            DpEndDate.SelectedDate = today;
             UpdatePeriodButtonStyles(BtnThisWeek);
-            PanelCustomDate.Visibility = Visibility.Collapsed;
-            LoadAnalytics();
+            await LoadSalesAsync();
         }
 
-        private void BtnThisMonth_Click(object sender, RoutedEventArgs e)
+        private async void BtnThisMonth_Click(object sender, RoutedEventArgs e)
         {
             _selectedPeriod = "month";
+            DpStartDate.SelectedDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            DpEndDate.SelectedDate = DateTime.Today;
             UpdatePeriodButtonStyles(BtnThisMonth);
-            PanelCustomDate.Visibility = Visibility.Collapsed;
-            LoadAnalytics();
+            await LoadSalesAsync();
         }
 
-        private void BtnCustom_Click(object sender, RoutedEventArgs e)
+        private async void BtnApplyDate_Click(object sender, RoutedEventArgs e)
         {
             _selectedPeriod = "custom";
-            UpdatePeriodButtonStyles(BtnCustom);
-            PanelCustomDate.Visibility = Visibility.Visible;
-        }
-
-        private void BtnApplyDate_Click(object sender, RoutedEventArgs e)
-        {
-            LoadAnalytics();
+            UpdatePeriodButtonStyles(BtnApplyDate);
+            await LoadSalesAsync();
         }
 
         private void UpdatePeriodButtonStyles(Button activeButton)
         {
-            // Reset all to inactive style
             var inactiveStyle = FindResource("PeriodButtonStyle") as Style;
             var activeStyle = FindResource("PeriodButtonActiveStyle") as Style;
 
             BtnToday.Style = inactiveStyle;
             BtnThisWeek.Style = inactiveStyle;
             BtnThisMonth.Style = inactiveStyle;
-            BtnCustom.Style = inactiveStyle;
-
-            // Set active button to active style
+            BtnApplyDate.Style = inactiveStyle;
             activeButton.Style = activeStyle;
         }
 
-        private async void LoadAnalytics()
+        private (DateTime StartDate, DateTime EndDate) GetSelectedRange()
+        {
+            var startDate = DpStartDate.SelectedDate ?? DateTime.Today;
+            var endDate = DpEndDate.SelectedDate ?? DateTime.Today;
+            return startDate <= endDate ? (startDate, endDate) : (endDate, startDate);
+        }
+
+        private async Task LoadSalesAsync()
         {
             if (_posDbService == null)
             {
+                TxtSalesStatus.Text = "Database belum dikonfigurasi.";
                 ToastHelper.ShowWarning("Database Not Configured", "Configure pos.db in Settings first.");
                 return;
             }
 
+            _loadCts?.Cancel();
+            _loadCts = new CancellationTokenSource();
+            var token = _loadCts.Token;
+
             try
             {
-                DateTime startDate, endDate;
+                SetLoading(true);
+                var (startDate, endDate) = GetSelectedRange();
 
-                switch (_selectedPeriod)
-                {
-                    case "today":
-                        startDate = DateTime.Today;
-                        endDate = DateTime.Today;
-                        break;
+                var revenueTask = _posDbService.GetSalesRevenueAsync(startDate, endDate);
+                var profitTask = _posDbService.GetSalesProfitAsync(startDate, endDate);
+                var transactionTask = _posDbService.GetSalesTransactionCountAsync(startDate, endDate);
+                var topProductsTask = _posDbService.GetTopSellingProductsAsync(startDate, endDate, 10);
+                var dailySalesTask = _posDbService.GetDailySalesAsync(startDate, endDate);
+                var customerTask = _posDbService.GetCustomerPurchasesAsync(startDate, endDate);
+                var lineItemsTask = _posDbService.GetSalesLineItemsAsync(startDate, endDate);
 
-                    case "week":
-                        startDate = DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek);
-                        endDate = DateTime.Today;
-                        break;
+                await Task.WhenAll(
+                    revenueTask,
+                    profitTask,
+                    transactionTask,
+                    topProductsTask,
+                    dailySalesTask,
+                    customerTask,
+                    lineItemsTask);
 
-                    case "month":
-                        startDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-                        endDate = DateTime.Today;
-                        break;
+                token.ThrowIfCancellationRequested();
 
-                    case "custom":
-                    default:
-                        startDate = DpStartDate.SelectedDate ?? DateTime.Today.AddDays(-7);
-                        endDate = DpEndDate.SelectedDate ?? DateTime.Today;
-                        break;
-                }
+                var totalRevenue = await revenueTask;
+                var totalProfit = await profitTask;
+                var totalTransactions = await transactionTask;
+                var topProducts = await topProductsTask;
+                var dailySales = await dailySalesTask;
+                var customerPurchases = await customerTask;
+                var lineItems = await lineItemsTask;
 
-                // Get real data from pos.db - only sales transactions (DocumentTypeId = 2, TypeCode 200)
-                decimal totalRevenue = await _posDbService.GetSalesRevenueAsync(startDate, endDate);
-                decimal totalProfit = await _posDbService.GetSalesProfitAsync(startDate, endDate);
-                int totalTransactions = await _posDbService.GetSalesTransactionCountAsync(startDate, endDate);
+                UpdateSummary(startDate, endDate, totalRevenue, totalProfit, totalTransactions);
+                UpdateTopProducts(topProducts);
+                UpdateSalesChart(dailySales);
+                UpdateCustomerInsights(customerPurchases, startDate, endDate);
+                UpdateReportRows(lineItems);
 
-                decimal avgTransaction = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
-                decimal profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-
-                // Update summary cards
-                TxtTotalRevenue.Text = $"Rp {totalRevenue:N0}";
-                TxtTotalProfit.Text = $"Rp {totalProfit:N0}";
-                TxtProfitMargin.Text = $"Margin: {profitMargin:F1}%";
-                TxtTotalTransactions.Text = totalTransactions.ToString();
-                TxtAvgTransaction.Text = $"Rp {avgTransaction:N0}";
-
-                // Update period labels
-                string periodLabel = _selectedPeriod switch
-                {
-                    "today" => "Hari ini",
-                    "week" => "Minggu ini",
-                    "month" => "Bulan ini",
-                    "custom" => $"{startDate:dd/MM/yyyy} - {endDate:dd/MM/yyyy}",
-                    _ => "Periode"
-                };
-                TxtRevenueLabel.Text = periodLabel;
-                TxtTransactionLabel.Text = $"{totalTransactions} transaksi";
-                TxtAvgLabel.Text = "Per transaksi";
-
-                // Get top 10 products by quantity sold (real data from DocumentItem)
-                var topProductsData = await _posDbService.GetTopSellingProductsAsync(startDate, endDate, 10);
-                _topProducts.Clear();
-                int rank = 1;
-                foreach (var product in topProductsData)
-                {
-                    _topProducts.Add(new ProductSales
-                    {
-                        Rank = rank++,
-                        ProductName = product.ProductName,
-                        QuantitySold = (int)product.QuantitySold,
-                        Revenue = product.Revenue,
-                        Profit = product.Profit
-                    });
-                }
-
-                // Update sales chart
-                await UpdateSalesChartAsync(startDate, endDate);
-
-                // Customer insights from real Customer table
-                await UpdateCustomerInsightsAsync(startDate, endDate);
+                TxtSalesStatus.Text = $"Periode {startDate:dd/MM/yyyy} - {endDate:dd/MM/yyyy}. Menampilkan {_reportRows.Count:N0} baris detail.";
+            }
+            catch (OperationCanceledException)
+            {
+                // Filter terbaru sedang diproses.
             }
             catch (Exception ex)
             {
                 await _loggingService.LogErrorAsync(
-                    $"Error loading sales analytics: {ex.Message}",
-                    "SalesAnalytics",
+                    $"Error loading sales module: {ex.Message}",
+                    "Sales",
                     ex.ToString());
 
                 ToastHelper.ShowError("Load Failed", ex.Message);
+                TxtSalesStatus.Text = $"Gagal memuat data: {ex.Message}";
+            }
+            finally
+            {
+                SetLoading(false);
             }
         }
 
-        private async Task UpdateSalesChartAsync(DateTime startDate, DateTime endDate)
+        private void SetLoading(bool isLoading)
+        {
+            BtnToday.IsEnabled = !isLoading;
+            BtnThisWeek.IsEnabled = !isLoading;
+            BtnThisMonth.IsEnabled = !isLoading;
+            BtnApplyDate.IsEnabled = !isLoading;
+            BtnExportCSV.IsEnabled = !isLoading;
+            BtnExportExcel.IsEnabled = !isLoading;
+            BtnExportPDF.IsEnabled = !isLoading;
+            TxtLoading.Visibility = isLoading ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void UpdateSummary(DateTime startDate, DateTime endDate, decimal totalRevenue, decimal totalProfit, int totalTransactions)
+        {
+            var avgTransaction = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
+            var profitMargin = totalRevenue > 0 ? totalProfit / totalRevenue * 100 : 0;
+            var periodLabel = _selectedPeriod switch
+            {
+                "today" => "Hari ini",
+                "week" => "Minggu ini",
+                "month" => "Bulan ini",
+                _ => $"{startDate:dd/MM/yyyy} - {endDate:dd/MM/yyyy}"
+            };
+
+            TxtTotalRevenue.Text = $"Rp {totalRevenue:N0}";
+            TxtTotalProfit.Text = $"Rp {totalProfit:N0}";
+            TxtProfitMargin.Text = $"Margin: {profitMargin:F1}%";
+            TxtTotalTransactions.Text = totalTransactions.ToString("N0");
+            TxtAvgTransaction.Text = $"Rp {avgTransaction:N0}";
+            TxtRevenueLabel.Text = periodLabel;
+            TxtTransactionLabel.Text = $"{totalTransactions:N0} transaksi";
+            TxtAvgLabel.Text = "Per transaksi";
+        }
+
+        private void UpdateTopProducts(List<ProductSalesData> topProducts)
+        {
+            var ranked = topProducts.Select((product, index) => new ProductSales
+            {
+                Rank = index + 1,
+                ProductName = product.ProductName,
+                QuantitySold = (int)product.QuantitySold,
+                Revenue = product.Revenue,
+                Profit = product.Profit
+            });
+
+            _topProducts = new ObservableCollection<ProductSales>(ranked);
+            DgTopProducts.ItemsSource = _topProducts;
+        }
+
+        private void UpdateSalesChart(List<DailySalesData> dailySales)
+        {
+            _dailySalesData = new ObservableCollection<DailySalesData>();
+
+            if (dailySales.Count == 0)
+            {
+                TxtChartNoData.Visibility = Visibility.Visible;
+                IcSalesChart.ItemsSource = _dailySalesData;
+                return;
+            }
+
+            TxtChartNoData.Visibility = Visibility.Collapsed;
+            var limitedSales = dailySales.Take(14).ToList();
+            var maxRevenue = limitedSales.Max(s => s.Revenue);
+
+            foreach (var sale in limitedSales)
+            {
+                sale.BarWidth = maxRevenue > 0
+                    ? Math.Max(4, (double)(sale.Revenue / maxRevenue) * 520)
+                    : 4;
+                _dailySalesData.Add(sale);
+            }
+
+            IcSalesChart.ItemsSource = _dailySalesData;
+        }
+
+        private void UpdateCustomerInsights(List<CustomerPurchaseInfo> customerPurchases, DateTime startDate, DateTime endDate)
+        {
+            TxtUniqueCustomers.Text = customerPurchases.Count.ToString("N0");
+
+            var bestCustomer = customerPurchases
+                .OrderByDescending(c => c.PurchaseCount)
+                .ThenByDescending(c => c.TotalSpent)
+                .FirstOrDefault();
+
+            TxtBestCustomer.Text = bestCustomer?.Name ?? "-";
+            TxtBestCustomerSpent.Text = bestCustomer == null
+                ? "Tidak ada data"
+                : $"Rp {bestCustomer.TotalSpent:N0} ({bestCustomer.PurchaseCount:N0} transaksi)";
+
+            var daysInRange = Math.Max(1, (int)(endDate - startDate).TotalDays + 1);
+            var totalTxCount = customerPurchases.Sum(c => c.PurchaseCount);
+            var txPerDay = totalTxCount > 0 ? (decimal)totalTxCount / daysInRange : 0;
+            TxtTxPerDay.Text = txPerDay.ToString("F1");
+        }
+
+        private void UpdateReportRows(List<SalesLineItem> lineItems)
+        {
+            _allSalesLineItems = lineItems
+                .OrderByDescending(item => item.Date)
+                .ToList();
+
+            _allReportRows = _allSalesLineItems
+                .Select(li => new ReportRow
+                {
+                    Date = li.Date,
+                    Invoice = li.Invoice ?? "-",
+                    ProductName = li.ProductName ?? "Unknown",
+                    Quantity = (int)li.Quantity,
+                    Price = li.Price,
+                    Total = li.Total,
+                    Profit = li.Profit
+                })
+                .ToList();
+
+            _reportRows = new ObservableCollection<ReportRow>(_allReportRows);
+            DgReports.ItemsSource = _reportRows;
+            TxtReportInfo.Text = $"Menampilkan {_reportRows.Count:N0} baris data";
+        }
+
+        public async Task LoadDataAsync()
+        {
+            await LoadSalesAsync();
+        }
+
+        private async void BtnExportCSV_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportWithDialogAsync(
+                ExportFormat.Csv,
+                "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                "csv");
+        }
+
+        private async void BtnExportExcel_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportWithDialogAsync(
+                ExportFormat.Excel,
+                "Excel files (*.xlsx)|*.xlsx|All files (*.*)|*.*",
+                "xlsx");
+        }
+
+        private async void BtnExportPDF_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportWithDialogAsync(
+                ExportFormat.Pdf,
+                "PDF files (*.pdf)|*.pdf|All files (*.*)|*.*",
+                "pdf");
+        }
+
+        private async Task ExportWithDialogAsync(ExportFormat format, string filter, string defaultExt)
         {
             try
             {
-                var dailySales = await _posDbService.GetDailySalesAsync(startDate, endDate);
-
-                _dailySalesData.Clear();
-
-                if (dailySales == null || dailySales.Count == 0)
+                if (_allSalesLineItems.Count == 0)
                 {
-                    TxtChartNoData.Visibility = Visibility.Visible;
+                    ToastHelper.ShowInfo("No Data", "Tidak ada data untuk di-export.", Window.GetWindow(this));
                     return;
                 }
 
-                TxtChartNoData.Visibility = Visibility.Collapsed;
-
-                // Limit to max 10 bars for clean display
-                var limitedSales = dailySales.Take(10).ToList();
-
-                // Find max revenue for scaling
-                decimal maxRevenue = limitedSales.Max(s => s.Revenue);
-
-                // Calculate bar widths (percentage of available space, will be scaled in XAML)
-                // Estimate available bar area width (total width minus date label ~70px and revenue label ~100px)
-                // We use a base width of ~300px as typical available space
-                double estimatedBarAreaWidth = 300;
-
-                foreach (var sale in limitedSales)
+                var saveDialog = new SaveFileDialog
                 {
-                    double barWidth = maxRevenue > 0
-                        ? (double)sale.Revenue / (double)maxRevenue * estimatedBarAreaWidth
-                        : 4; // minimum width
+                    Filter = filter,
+                    DefaultExt = defaultExt,
+                    FileName = $"penjualan_{DateTime.Now:yyyyMMdd_HHmmss}.{defaultExt}"
+                };
 
-                    sale.BarWidth = Math.Max(4, barWidth); // minimum 4px
+                if (saveDialog.ShowDialog() == true)
+                {
+                    var result = await _exportService.ExportSalesAsync(
+                        _allSalesLineItems,
+                        saveDialog.FileName,
+                        format,
+                        GetExportPeriodLabel());
 
-                    _dailySalesData.Add(sale);
+                    if (result.Success)
+                    {
+                        ToastHelper.ShowSuccess("Export Success", $"{result.Message} {result.FilePath}", Window.GetWindow(this));
+                    }
+                    else
+                    {
+                        ToastHelper.ShowError("Export Failed", result.Message, Window.GetWindow(this));
+                    }
                 }
             }
             catch (Exception ex)
             {
-                await _loggingService.LogWarningAsync(
-                    $"Error updating sales chart: {ex.Message}", "SalesAnalytics");
-
-                _dailySalesData.Clear();
-                TxtChartNoData.Visibility = Visibility.Visible;
+                _loggingService.LogErrorAsync($"Error exporting sales report: {ex.Message}", "Sales", ex.ToString());
+                ToastHelper.ShowError("Export Failed", $"Gagal export: {ex.Message}", Window.GetWindow(this));
             }
         }
 
-        private async Task UpdateCustomerInsightsAsync(DateTime startDate, DateTime endDate)
+        private string GetExportPeriodLabel()
         {
-            try
+            var (startDate, endDate) = GetSelectedRange();
+            return _selectedPeriod switch
             {
-                // Get customer purchase data from real Customer table
-                var customerPurchases = await _posDbService.GetCustomerPurchasesAsync(startDate, endDate);
-
-                // Unique customers who made purchases
-                int uniqueCustomers = customerPurchases.Count;
-                TxtUniqueCustomers.Text = uniqueCustomers.ToString();
-
-                // Best customer (most transactions, then highest total as tiebreaker)
-                var bestCustomer = customerPurchases
-                    .OrderByDescending(c => c.PurchaseCount)
-                    .ThenByDescending(c => c.TotalSpent)
-                    .FirstOrDefault();
-
-                if (bestCustomer != null)
-                {
-                    TxtBestCustomer.Text = bestCustomer.Name ?? "-";
-                    TxtBestCustomerSpent.Text = $"Rp {bestCustomer.TotalSpent:N0} ({bestCustomer.PurchaseCount} transaksi)";
-                }
-                else
-                {
-                    TxtBestCustomer.Text = "-";
-                    TxtBestCustomerSpent.Text = "Tidak ada data";
-                }
-
-                // Calculate transactions per day
-                int daysInRange = Math.Max(1, (int)(endDate - startDate).TotalDays + 1);
-                int totalTxCount = customerPurchases.Sum(c => c.PurchaseCount);
-                decimal txPerDay = totalTxCount > 0
-                    ? (decimal)totalTxCount / daysInRange
-                    : 0;
-
-                TxtTxPerDay.Text = txPerDay.ToString("F1");
-            }
-            catch (Exception ex)
-            {
-                await _loggingService.LogWarningAsync(
-                    $"Error updating customer insights: {ex.Message}", "SalesAnalytics");
-
-                TxtUniqueCustomers.Text = "-";
-                TxtBestCustomer.Text = "Error";
-                TxtTxPerDay.Text = "-";
-            }
-        }
-
-        /// <summary>
-        /// Public method to reload data (called from MainWindow sync)
-        /// </summary>
-        public async Task LoadDataAsync()
-        {
-            LoadAnalytics();
+                "today" => "Hari Ini",
+                "week" => "Minggu Ini",
+                "month" => "Bulan Ini",
+                _ => $"{startDate:dd/MM/yyyy} - {endDate:dd/MM/yyyy}"
+            };
         }
     }
 
-    /// <summary>
-    /// Data model for product sales analytics
-    /// </summary>
     public class ProductSales
     {
         public int Rank { get; set; }
@@ -309,19 +395,5 @@ namespace SmartSembakoAssistant.Views
         public int QuantitySold { get; set; }
         public decimal Revenue { get; set; }
         public decimal Profit { get; set; }
-    }
-
-    /// <summary>
-    /// Data model for analytics summary
-    /// </summary>
-    public class AnalyticsSummary
-    {
-        public decimal TotalRevenue { get; set; }
-        public decimal TotalProfit { get; set; }
-        public int TotalTransactions { get; set; }
-        public decimal AverageTransaction { get; set; }
-        public decimal ProfitMargin { get; set; }
-        public DateTime StartDate { get; set; }
-        public DateTime EndDate { get; set; }
     }
 }

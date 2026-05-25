@@ -244,6 +244,10 @@ namespace SmartSembakoAssistant.Models
         public bool MinimizeToTray { get; set; } = true;
         public string? LogPath { get; set; } = "data\\logs";
         public int MaxLogDays { get; set; } = 30;
+        public string? InstanceId { get; set; }
+        public string? MachineName { get; set; }
+        public bool IsActiveBotRuntime { get; set; } = true;
+        public DateTime? ActiveRuntimeSince { get; set; }
     }
 
     public class AppSetupState

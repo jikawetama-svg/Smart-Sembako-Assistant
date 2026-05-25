@@ -231,7 +231,6 @@ Setiap perubahan harus dicatat di `changelog.json` dengan format:
 - **README.md:** User guide (update jika ada perubahan signifikan)
 - **TECHNICAL_DOCS.md:** Developer documentation (update setiap perubahan)
 - **QUICK_START.md:** Setup guide (update jika setup berubah)
-- **PHASE1_SUMMARY.md:** Phase summary (update sesuai progress)
 - **PROJECT_STRUCTURE.md:** Structure overview (update jika ada file baru)
 - **changelog.json:** Change log (WAJIB update setiap perubahan)
 - **AGENT.md:** Agent guidelines (update jika ada perubahan arsitektur)
@@ -272,13 +271,12 @@ Setiap perubahan harus dicatat di `changelog.json` dengan format:
 - Fix DocumentTypeId Mapping
 - Enhanced Error Handling
 
-### Phase 4 (Coming Soon)
-- OCR dengan Tesseract
-- Google Sheets integration
-- Background scheduler
-- Automatic notifications
-- Daily auto-report
-- Installer + auto-start Windows
+### Current Active Capabilities
+- OCR receipt flow with review queue
+- Google Sheets priority sync for dashboard/reporting tabs
+- Background automation scheduler
+- Automatic notifications and daily summary
+- WhatsApp Cloud API and Baileys local sidecar
 
 ### Phase 5 (Future)
 - Voice note support
@@ -326,7 +324,6 @@ dotnet restore
 - User Guide: `README.md`
 - Technical Docs: `TECHNICAL_DOCS.md`
 - Quick Start: `QUICK_START.md`
-- Phase Summary: `PHASE1_SUMMARY.md`
 - Project Structure: `PROJECT_STRUCTURE.md`
 - Changelog: `changelog.json`
 - Restock Engine: `RESTOCK.md`

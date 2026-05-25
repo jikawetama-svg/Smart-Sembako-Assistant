@@ -14,15 +14,22 @@ namespace SmartSembakoAssistant.Services
         private readonly LoggingService _loggingService;
         private readonly HttpClient _httpClient;
         private Process? _process;
+        private CancellationTokenSource? _watchdogCts;
+        private DateTime? _disconnectedSince;
+        private int _watchdogTriggerCount;
+        private int _lastDesktopInboundPort = 8090;
+        private bool _watchdogRestarting;
 
         public bool IsRunning { get; private set; }
         public bool IsReachable { get; private set; }
+        public bool IsConnected { get; private set; }
         public bool IsPaired { get; private set; }
         public string? LastError { get; private set; }
         public string? LastPairingCode { get; private set; }
         public string? ConnectionState { get; private set; }
         public int? LastDisconnectStatusCode { get; private set; }
         public string? LastDisconnectReason { get; private set; }
+        public string? SidecarBuildTag { get; private set; }
         public bool PairingInProgress { get; private set; }
         public DateTime? LastValidatedAt { get; private set; }
         public int LocalApiPort => _configService.Config?.Baileys?.LocalApiPort ?? 8091;
@@ -42,6 +49,7 @@ namespace SmartSembakoAssistant.Services
 
         public async Task<bool> StartAsync(int desktopInboundPort)
         {
+            _lastDesktopInboundPort = desktopInboundPort;
             LastValidatedAt = DateTime.Now;
             var config = _configService.Config;
             string mode = WhatsAppModes.Normalize(config?.WhatsApp?.Mode);
@@ -60,6 +68,7 @@ namespace SmartSembakoAssistant.Services
             string? workingDirectory = ResolveWorkingDirectory(baileys);
             string? sidecarEntry = ResolveSidecarEntryPath(baileys, workingDirectory);
             string sessionPath = RuntimePaths.ResolveWritablePath(baileys.SessionPath, Path.Combine("data", "baileys-session"));
+            string mediaPath = RuntimePaths.ResolveWritablePath(Path.Combine("data", "baileys-media"), Path.Combine("data", "baileys-media"));
 
             await _loggingService.LogInfoAsync(
                 $"Baileys runtime paths: node={nodeBinary ?? "-"}, sidecar={sidecarEntry ?? "-"}, workingDir={workingDirectory ?? "-"}, session={sessionPath}",
@@ -96,6 +105,10 @@ namespace SmartSembakoAssistant.Services
                 {
                     await RefreshHealthAsync();
                     IsRunning = IsReachable || !_process.HasExited;
+                    if (IsRunning)
+                    {
+                        StartWatchdog();
+                    }
                     return IsRunning;
                 }
 
@@ -112,12 +125,16 @@ namespace SmartSembakoAssistant.Services
 
                 startInfo.Environment["SSA_LOCAL_API_PORT"] = baileys.LocalApiPort.ToString();
                 startInfo.Environment["SSA_SESSION_PATH"] = sessionPath;
+                startInfo.Environment["SSA_MEDIA_PATH"] = mediaPath;
                 startInfo.Environment["SSA_DESKTOP_INBOUND_URL"] = $"http://localhost:{desktopInboundPort}/baileys/events/inbound";
                 startInfo.Environment["SSA_PAIRING_CODE_TTL_SECONDS"] = Math.Max(30, baileys.PairingCodeTtlSeconds).ToString();
                 startInfo.Environment["SSA_PAIRING_RETRY_COOLDOWN_SECONDS"] = Math.Max(15, baileys.PairingRetryCooldownSeconds).ToString();
                 startInfo.Environment["SSA_PAIRING_RATE_LIMIT_COOLDOWN_MINUTES"] = Math.Max(1, baileys.PairingRateLimitCooldownMinutes).ToString();
                 startInfo.Environment["SSA_MAX_PAIRING_REQUESTS_PER_HOUR"] = Math.Max(1, baileys.MaxPairingRequestsPerHour).ToString();
+                startInfo.Environment["SSA_INBOUND_STALE_TOLERANCE_SECONDS"] = "120";
                 startInfo.Environment["SSA_AUTHORIZED_NUMBERS"] = BuildAuthorizedNumbersEnv(baileys);
+                startInfo.Environment["SSA_APP_INSTANCE_ID"] = _configService.Config?.App?.InstanceId ?? string.Empty;
+                startInfo.Environment["SSA_MACHINE_NAME"] = _configService.Config?.App?.MachineName ?? Environment.MachineName;
 
                 _process = new Process
                 {
@@ -151,7 +168,8 @@ namespace SmartSembakoAssistant.Services
                     if (IsReachable)
                     {
                         IsRunning = true;
-                        await _loggingService.LogInfoAsync($"Baileys sidecar aktif di {BaseUrl}", "Baileys");
+                        StartWatchdog();
+                        await _loggingService.LogInfoAsync($"Baileys sidecar aktif di {BaseUrl}; build={SidecarBuildTag ?? "-"}", "Baileys");
                         return true;
                     }
                 }
@@ -283,14 +301,29 @@ namespace SmartSembakoAssistant.Services
         {
             try
             {
+                _watchdogCts?.Cancel();
+                _watchdogCts?.Dispose();
+                _watchdogCts = null;
+
                 if (_process != null && !_process.HasExited)
                 {
-                    _process.Kill(true);
+                    await RequestGracefulShutdownAsync();
+                    if (!_process.HasExited)
+                    {
+                        await Task.Delay(1000);
+                    }
+
+                    if (!_process.HasExited)
+                    {
+                        _process.Kill(true);
+                    }
+
                     await _process.WaitForExitAsync();
                 }
 
                 IsRunning = false;
                 IsReachable = false;
+                IsConnected = false;
                 PairingInProgress = false;
             }
             catch (Exception ex)
@@ -301,7 +334,7 @@ namespace SmartSembakoAssistant.Services
 
         public bool CanSendOutbound()
         {
-            return IsReachable && IsPaired;
+            return IsReachable && IsPaired && IsConnected;
         }
 
         public async Task<string?> SendQueuedMessageAsync(OutboundMessageRecord record)
@@ -347,6 +380,82 @@ namespace SmartSembakoAssistant.Services
                 throw new InvalidOperationException(response.Message);
             }
 
+            return response.ExternalMessageId;
+        }
+
+        public async Task SendTypingPresenceAsync(string recipientId, bool paused = false)
+        {
+            await RefreshHealthAsync();
+            if (!IsReachable || !IsConnected)
+            {
+                return;
+            }
+
+            await PostJsonAsync(
+                "/presence/typing",
+                new
+                {
+                    recipient = AutomationEngine.NormalizeWhatsAppNumber(recipientId),
+                    paused
+                });
+        }
+
+        public async Task<string?> SendDocumentAsync(string recipientId, string filePath, string caption = "")
+        {
+            await RefreshHealthAsync();
+            if (!CanSendOutbound())
+            {
+                await TryRecoverOutboundAsync();
+            }
+
+            if (!CanSendOutbound())
+            {
+                throw new InvalidOperationException(BuildActionHint());
+            }
+
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            {
+                throw new FileNotFoundException("File dokumen export tidak ditemukan.", filePath);
+            }
+
+            var fileInfo = new FileInfo(filePath);
+            var response = await PostJsonAsync(
+                "/messages/send-document",
+                new
+                {
+                    recipient = AutomationEngine.NormalizeWhatsAppNumber(recipientId),
+                    filePath = fileInfo.FullName,
+                    fileName = fileInfo.Name,
+                    mimeType = ResolveMimeType(fileInfo.Extension),
+                    caption
+                });
+
+            if (!response.Success && ShouldRecoverOutbound(response))
+            {
+                await TryRecoverOutboundAsync();
+                if (CanSendOutbound())
+                {
+                    response = await PostJsonAsync(
+                        "/messages/send-document",
+                        new
+                        {
+                            recipient = AutomationEngine.NormalizeWhatsAppNumber(recipientId),
+                            filePath = fileInfo.FullName,
+                            fileName = fileInfo.Name,
+                            mimeType = ResolveMimeType(fileInfo.Extension),
+                            caption
+                        });
+                }
+            }
+
+            if (!response.Success)
+            {
+                throw new InvalidOperationException(response.Message);
+            }
+
+            await _loggingService.LogInfoAsync(
+                $"Dokumen Baileys terkirim: {fileInfo.Name} ({fileInfo.Length} bytes) ke {AutomationEngine.NormalizeWhatsAppNumber(recipientId)}",
+                "Baileys");
             return response.ExternalMessageId;
         }
 
@@ -574,6 +683,97 @@ namespace SmartSembakoAssistant.Services
             await EnsureStartedAsync(_configService.Config?.WhatsApp?.LocalWebhookPort ?? 8090);
         }
 
+        private void StartWatchdog()
+        {
+            if (_watchdogCts != null && !_watchdogCts.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _watchdogCts = new CancellationTokenSource();
+            _ = Task.Run(() => RunWatchdogAsync(_watchdogCts.Token), _watchdogCts.Token);
+        }
+
+        private async Task RunWatchdogAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMinutes(2), cancellationToken);
+                    await RefreshHealthAsync();
+
+                    if (cancellationToken.IsCancellationRequested || !IsRunning)
+                    {
+                        continue;
+                    }
+
+                    if (!IsReachable)
+                    {
+                        _watchdogTriggerCount++;
+                        await _loggingService.LogWarningAsync(
+                            $"Baileys watchdog: sidecar tidak merespons, restart proses. trigger={_watchdogTriggerCount}",
+                            "Baileys");
+                        await RestartSidecarFromWatchdogAsync(cancellationToken);
+                        continue;
+                    }
+
+                    if (IsPaired && !IsConnected && _disconnectedSince.HasValue &&
+                        DateTime.Now - _disconnectedSince.Value > TimeSpan.FromMinutes(5))
+                    {
+                        _watchdogTriggerCount++;
+                        await _loggingService.LogWarningAsync(
+                            $"Baileys watchdog: paired tapi disconnected lebih dari 5 menit, trigger reconnect. trigger={_watchdogTriggerCount}",
+                            "Baileys");
+                        await PostJsonAsync("/session/reconnect", new { });
+                        _disconnectedSince = DateTime.Now;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogWarningAsync($"Baileys watchdog error: {ex.Message}", "Baileys");
+                }
+            }
+        }
+
+        private async Task RestartSidecarFromWatchdogAsync(CancellationToken cancellationToken)
+        {
+            if (_watchdogRestarting)
+            {
+                return;
+            }
+
+            _watchdogRestarting = true;
+            try
+            {
+                if (_process != null && !_process.HasExited)
+                {
+                    await RequestGracefulShutdownAsync();
+                    await Task.Delay(1000, cancellationToken);
+                    if (!_process.HasExited)
+                    {
+                        _process.Kill(true);
+                    }
+
+                    await _process.WaitForExitAsync(cancellationToken);
+                }
+
+                _process = null;
+                IsRunning = false;
+                IsReachable = false;
+                IsConnected = false;
+                await StartAsync(_lastDesktopInboundPort);
+            }
+            finally
+            {
+                _watchdogRestarting = false;
+            }
+        }
+
         private async Task<BaileysSendResponse> RequestPairingCodeOnceAsync(string normalizedPhoneNumber)
         {
             return await PostJsonAsync("/session/pairing/start", new
@@ -665,6 +865,7 @@ namespace SmartSembakoAssistant.Services
                 if (!response.IsSuccessStatusCode)
                 {
                     IsReachable = false;
+                    IsConnected = false;
                     IsPaired = false;
                     LastError = ToFriendlyError(content);
                     return;
@@ -679,8 +880,26 @@ namespace SmartSembakoAssistant.Services
             catch (Exception ex)
             {
                 IsReachable = false;
+                IsConnected = false;
                 IsPaired = false;
                 LastError = ToFriendlyError(ex.Message);
+            }
+        }
+
+        private async Task RequestGracefulShutdownAsync()
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                string json = JsonSerializer.Serialize(new { }, JsonOptions());
+                using var response = await _httpClient.PostAsync(
+                    $"{BaseUrl}/shutdown",
+                    new StringContent(json, Encoding.UTF8, "application/json"),
+                    timeout.Token);
+            }
+            catch
+            {
+                // Jika sidecar tidak merespons shutdown, StopAsync akan fallback ke Kill.
             }
         }
 
@@ -732,12 +951,15 @@ namespace SmartSembakoAssistant.Services
         private void ApplyHealthSnapshot(BaileysHealthResponse health)
         {
             IsReachable = true;
+            IsConnected = health.Connected;
             IsPaired = health.Paired;
+            UpdateDisconnectClock(health.Connected);
             LastPairingCode = health.PairingCode;
             LastError = health.Error;
             ConnectionState = health.ConnectionState;
             LastDisconnectStatusCode = health.LastDisconnectStatusCode;
             LastDisconnectReason = health.LastDisconnectReason;
+            SidecarBuildTag = health.SidecarBuildTag;
             PairingInProgress = health.PairingInProgress;
             LastValidatedAt = DateTime.Now;
         }
@@ -745,14 +967,28 @@ namespace SmartSembakoAssistant.Services
         private void ApplyStatusSnapshot(BaileysSessionStatus status)
         {
             IsReachable = true;
+            IsConnected = status.Connected;
             IsPaired = status.Paired;
+            UpdateDisconnectClock(status.Connected);
             LastPairingCode = status.PairingCode;
             LastError = status.Error;
             ConnectionState = status.ConnectionState;
             LastDisconnectStatusCode = status.LastDisconnectStatusCode;
             LastDisconnectReason = status.LastDisconnectReason;
+            SidecarBuildTag = status.SidecarBuildTag;
             PairingInProgress = status.PairingInProgress;
             LastValidatedAt = DateTime.Now;
+        }
+
+        private void UpdateDisconnectClock(bool connected)
+        {
+            if (connected)
+            {
+                _disconnectedSince = null;
+                return;
+            }
+
+            _disconnectedSince ??= DateTime.Now;
         }
 
         public string BuildActionHint()
@@ -762,9 +998,14 @@ namespace SmartSembakoAssistant.Services
                 return "WhatsApp lokal terputus. Coba hubungkan ulang atau jalankan perbaikan setup.";
             }
 
-            if (IsPaired)
+            if (IsPaired && IsConnected)
             {
                 return "WhatsApp lokal siap kirim.";
+            }
+
+            if (IsPaired && !IsConnected)
+            {
+                return "WhatsApp lokal sudah paired, sedang reconnect. Tunggu beberapa detik lalu coba lagi.";
             }
 
             if (PairingInProgress)
@@ -806,6 +1047,20 @@ namespace SmartSembakoAssistant.Services
             return string.Equals(response.Reason, "connection-closed", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(response.Reason, "not-ready", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(response.Reason, "upstream-failure", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ResolveMimeType(string extension)
+        {
+            return extension.ToLowerInvariant() switch
+            {
+                ".csv" => "text/csv",
+                ".zip" => "application/zip",
+                ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ".xls" => "application/vnd.ms-excel",
+                ".pdf" => "application/pdf",
+                ".txt" => "text/plain",
+                _ => "application/octet-stream"
+            };
         }
 
         private void HandleProcessOutput(object sender, DataReceivedEventArgs e)
@@ -1178,6 +1433,7 @@ namespace SmartSembakoAssistant.Services
             public string? LastDisconnectReason { get; set; }
             public DateTime? LastSeen { get; set; }
             public string? SessionPath { get; set; }
+            public string? SidecarBuildTag { get; set; }
             public int[]? BaileysVersion { get; set; }
             public string[]? Browser { get; set; }
             public string? Error { get; set; }
@@ -1243,6 +1499,7 @@ namespace SmartSembakoAssistant.Services
         public string? LastDisconnectReason { get; set; }
         public DateTime? LastSeen { get; set; }
         public string? SessionPath { get; set; }
+        public string? SidecarBuildTag { get; set; }
         public int[]? BaileysVersion { get; set; }
         public string[]? Browser { get; set; }
         public string? Error { get; set; }

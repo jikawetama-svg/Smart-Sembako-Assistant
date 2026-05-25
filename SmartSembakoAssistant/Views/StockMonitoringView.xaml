@@ -4,53 +4,41 @@
              Background="Transparent">
 
     <UserControl.Resources>
-        <!-- Stat Badge Style -->
-        <Style x:Key="StatBadgeStyle" TargetType="Border">
+        <Style x:Key="StatCardStyle" TargetType="Border">
             <Setter Property="Background" Value="White"/>
             <Setter Property="CornerRadius" Value="8"/>
             <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="BorderBrush" Value="#E2E8F0"/>
+            <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Effect">
-                        <Setter.Value>
-                            <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.1" Direction="270"/>
-                        </Setter.Value>
-                    </Setter>
-                </Trigger>
-            </Style.Triggers>
         </Style>
 
-        <!-- Filter Button Style -->
         <Style x:Key="FilterButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="White"/>
-            <Setter Property="Foreground" Value="#374151"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="Padding" Value="12,8"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#E5E7EB"/>
-            <Setter Property="Border.CornerRadius" Value="6"/>
-            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="BorderBrush" Value="#CBD5E1"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F3F4F6"/>
-                    <Setter Property="BorderBrush" Value="#D1D5DB"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Margin" Value="0,0,8,0"/>
         </Style>
 
-        <!-- Active Filter Button -->
         <Style x:Key="FilterButtonActiveStyle" TargetType="Button" BasedOn="{StaticResource FilterButtonStyle}">
             <Setter Property="Background" Value="#10B981"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderBrush" Value="#10B981"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#059669"/>
-                    <Setter Property="BorderBrush" Value="#059669"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <Style x:Key="DataGridHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#F8FAFC"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="BorderBrush" Value="#E2E8F0"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
         </Style>
     </UserControl.Resources>
 
@@ -58,234 +46,178 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Quick Stats Bar -->
-        <Border Grid.Row="0" Background="White" CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="📊 Quick Stats" FontSize="12" FontWeight="SemiBold" Foreground="#374151" Margin="0,0,14,0" VerticalAlignment="Center"/>
-                
-                <Border Style="{StaticResource StatBadgeStyle}" Background="#ECFDF5">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🟢" FontSize="11" VerticalAlignment="Center"/>
-                        <TextBlock Text="Aman:" FontSize="11" Foreground="#059669" Margin="4,0,0,0" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="TxtSafeStock" Text="0" FontSize="11" FontWeight="Bold" Foreground="#059669" Margin="3,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-                
-                <Border Style="{StaticResource StatBadgeStyle}" Background="#FEF3C7">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🟡" FontSize="11" VerticalAlignment="Center"/>
-                        <TextBlock Text="Rendah:" FontSize="11" Foreground="#D97706" Margin="4,0,0,0" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="TxtLowStock" Text="0" FontSize="11" FontWeight="Bold" Foreground="#D97706" Margin="3,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-                
-                <Border Style="{StaticResource StatBadgeStyle}" Background="#FEE2E2">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="🔴" FontSize="11" VerticalAlignment="Center"/>
-                        <TextBlock Text="Habis:" FontSize="11" Foreground="#DC2626" Margin="4,0,0,0" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="TxtOutStock" Text="0" FontSize="11" FontWeight="Bold" Foreground="#DC2626" Margin="3,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-                
-                <Border Style="{StaticResource StatBadgeStyle}" Background="#FEE2E2">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="⚠️" FontSize="11" VerticalAlignment="Center"/>
-                        <TextBlock Text="Minus:" FontSize="11" Foreground="#DC2626" Margin="4,0,0,0" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="TxtNegativeStock" Text="0" FontSize="11" FontWeight="Bold" Foreground="#DC2626" Margin="3,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-            </StackPanel>
-        </Border>
-
-        <!-- Search & Filter -->
-        <Border Grid.Row="1" Background="White" CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
+        <Border Grid.Row="0" Background="White" CornerRadius="10" Padding="18,14" Margin="0,0,0,12">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <TextBox x:Name="TxtSearch" Grid.Column="0" Padding="10,8" FontSize="11" Margin="0,0,10,0"
-                         VerticalContentAlignment="Center" TextChanged="TxtSearch_TextChanged"/>
-
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="BtnAll" Content="Semua" Style="{StaticResource FilterButtonActiveStyle}" Click="BtnAll_Click"/>
-                    <Button x:Name="BtnLowStock" Content="Stok Rendah" Style="{StaticResource FilterButtonStyle}" Click="BtnLowStock_Click"/>
-                    <Button x:Name="BtnRefresh" Content="🔄 Refresh" Style="{StaticResource FilterButtonStyle}" Click="BtnRefresh_Click"/>
+                <StackPanel>
+                    <TextBlock Text="Stock Monitoring" FontSize="20" FontWeight="SemiBold" Foreground="#0F172A"/>
+                    <TextBlock Text="Pantau stok aman, rendah, habis, minus, harga, dan margin produk."
+                               FontSize="12" Foreground="#64748B" Margin="0,4,0,0"/>
                 </StackPanel>
+                <Button x:Name="BtnRefresh" Content="Refresh" HorizontalAlignment="Right"
+                        Padding="14,8" Background="#10B981" Foreground="White"
+                        BorderThickness="0" Cursor="Hand" Click="BtnRefresh_Click"/>
             </Grid>
         </Border>
 
-        <!-- DataGrid -->
-        <Border Grid.Row="2" Background="White" CornerRadius="10" Padding="0" Margin="0,0,0,12">
-            <ListView x:Name="LvProducts"
-                      BorderThickness="0"
-                      Background="Transparent"
-                      VirtualizingStackPanel.IsVirtualizing="True"
-                      VirtualizingStackPanel.VirtualizationMode="Recycling"
+        <UniformGrid Grid.Row="1" Columns="5" Margin="0,0,0,12">
+            <Border Style="{StaticResource StatCardStyle}">
+                <StackPanel>
+                    <TextBlock Text="Total Produk" FontSize="11" Foreground="#64748B"/>
+                    <TextBlock x:Name="TxtTotalStock" Text="0" FontSize="20" FontWeight="Bold" Foreground="#0F172A"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCardStyle}" Background="#F0FDF4">
+                <StackPanel>
+                    <TextBlock Text="Aman" FontSize="11" Foreground="#166534"/>
+                    <TextBlock x:Name="TxtSafeStock" Text="0" FontSize="20" FontWeight="Bold" Foreground="#16A34A"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCardStyle}" Background="#FEFCE8">
+                <StackPanel>
+                    <TextBlock Text="Rendah" FontSize="11" Foreground="#854D0E"/>
+                    <TextBlock x:Name="TxtLowStock" Text="0" FontSize="20" FontWeight="Bold" Foreground="#CA8A04"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCardStyle}" Background="#FFF7ED">
+                <StackPanel>
+                    <TextBlock Text="Habis" FontSize="11" Foreground="#9A3412"/>
+                    <TextBlock x:Name="TxtOutStock" Text="0" FontSize="20" FontWeight="Bold" Foreground="#EA580C"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCardStyle}" Background="#FEF2F2" Margin="0">
+                <StackPanel>
+                    <TextBlock Text="Minus" FontSize="11" Foreground="#991B1B"/>
+                    <TextBlock x:Name="TxtNegativeStock" Text="0" FontSize="20" FontWeight="Bold" Foreground="#DC2626"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <Border Grid.Row="2" Background="White" CornerRadius="10" Padding="14,12" Margin="0,0,0,12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                    <Button x:Name="BtnAll" Content="Semua" Tag="Semua" Style="{StaticResource FilterButtonActiveStyle}" Click="StockFilter_Click"/>
+                    <Button x:Name="BtnMinus" Content="Minus" Tag="Minus" Style="{StaticResource FilterButtonStyle}" Click="StockFilter_Click"/>
+                    <Button x:Name="BtnOut" Content="Habis" Tag="Habis" Style="{StaticResource FilterButtonStyle}" Click="StockFilter_Click"/>
+                    <Button x:Name="BtnLowStock" Content="Rendah" Tag="Rendah" Style="{StaticResource FilterButtonStyle}" Click="StockFilter_Click"/>
+                    <Button x:Name="BtnSafe" Content="Aman" Tag="Aman" Style="{StaticResource FilterButtonStyle}" Click="StockFilter_Click"/>
+                    <TextBlock x:Name="TxtLoading" Text="Memuat data..." FontSize="12" Foreground="#64748B"
+                               VerticalAlignment="Center" Margin="8,0,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+
+                <TextBox x:Name="TxtSearch" Grid.Row="1" Padding="12,9" FontSize="12"
+                         VerticalContentAlignment="Center"
+                         TextChanged="TxtSearch_TextChanged"
+                         ToolTip="Cari nama produk atau SKU"/>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3" Background="White" CornerRadius="10" Padding="0" Margin="0,0,0,12">
+            <DataGrid x:Name="DgProducts"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      HeadersVisibility="Column"
+                      GridLinesVisibility="Horizontal"
+                      AlternatingRowBackground="#F8FAFC"
+                      RowHeight="34"
+                      MaxHeight="520"
+                      FontSize="12"
+                      EnableRowVirtualization="True"
+                      EnableColumnVirtualization="True"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
                       ScrollViewer.CanContentScroll="True"
-                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                      SelectionMode="Single">
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="Produk" DisplayMemberBinding="{Binding Name}" Width="220">
-                            <GridViewColumn.HeaderContainerStyle>
-                                <Style TargetType="GridViewColumnHeader">
-                                    <Setter Property="Background" Value="#F9FAFB"/>
-                                    <Setter Property="Foreground" Value="#374151"/>
-                                    <Setter Property="FontWeight" Value="SemiBold"/>
-                                    <Setter Property="FontSize" Value="11"/>
-                                    <Setter Property="Padding" Value="12,8"/>
-                                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                </Style>
-                            </GridViewColumn.HeaderContainerStyle>
-                        </GridViewColumn>
-                        <GridViewColumn Header="Stok" DisplayMemberBinding="{Binding Stock}" Width="80">
-                            <GridViewColumn.HeaderContainerStyle>
-                                <Style TargetType="GridViewColumnHeader">
-                                    <Setter Property="Background" Value="#F9FAFB"/>
-                                    <Setter Property="Foreground" Value="#374151"/>
-                                    <Setter Property="FontWeight" Value="SemiBold"/>
-                                    <Setter Property="FontSize" Value="11"/>
-                                    <Setter Property="Padding" Value="12,8"/>
-                                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                </Style>
-                            </GridViewColumn.HeaderContainerStyle>
-                        </GridViewColumn>
-                        <GridViewColumn Header="Satuan" DisplayMemberBinding="{Binding Unit}" Width="80">
-                            <GridViewColumn.HeaderContainerStyle>
-                                <Style TargetType="GridViewColumnHeader">
-                                    <Setter Property="Background" Value="#F9FAFB"/>
-                                    <Setter Property="Foreground" Value="#374151"/>
-                                    <Setter Property="FontWeight" Value="SemiBold"/>
-                                    <Setter Property="FontSize" Value="11"/>
-                                    <Setter Property="Padding" Value="12,8"/>
-                                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                </Style>
-                            </GridViewColumn.HeaderContainerStyle>
-                        </GridViewColumn>
-                        <GridViewColumn Header="Harga Beli" Width="110">
-                            <GridViewColumn.CellTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding PurchasePrice, StringFormat='Rp {0:N0}'}" 
-                                               Margin="12,4" FontSize="11"/>
-                                </DataTemplate>
-                            </GridViewColumn.CellTemplate>
-                            <GridViewColumn.HeaderContainerStyle>
-                                <Style TargetType="GridViewColumnHeader">
-                                    <Setter Property="Background" Value="#F9FAFB"/>
-                                    <Setter Property="Foreground" Value="#374151"/>
-                                    <Setter Property="FontWeight" Value="SemiBold"/>
-                                    <Setter Property="FontSize" Value="11"/>
-                                    <Setter Property="Padding" Value="12,8"/>
-                                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                </Style>
-                            </GridViewColumn.HeaderContainerStyle>
-                        </GridViewColumn>
-                        <GridViewColumn Header="Harga Jual" Width="110">
-                            <GridViewColumn.CellTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding SellingPrice, StringFormat='Rp {0:N0}'}" 
-                                               Margin="12,4" FontSize="11"/>
-                                </DataTemplate>
-                            </GridViewColumn.CellTemplate>
-                            <GridViewColumn.HeaderContainerStyle>
-                                <Style TargetType="GridViewColumnHeader">
-                                    <Setter Property="Background" Value="#F9FAFB"/>
-                                    <Setter Property="Foreground" Value="#374151"/>
-                                    <Setter Property="FontWeight" Value="SemiBold"/>
-                                    <Setter Property="FontSize" Value="11"/>
-                                    <Setter Property="Padding" Value="12,8"/>
-                                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                </Style>
-                            </GridViewColumn.HeaderContainerStyle>
-                        </GridViewColumn>
-                        <GridViewColumn Header="Status" Width="120">
-                            <GridViewColumn.CellTemplate>
-                                <DataTemplate>
-                                    <Border CornerRadius="4" Padding="8,4" HorizontalAlignment="Center">
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Background" Value="#ECFDF5"/>
+                      ColumnHeaderStyle="{StaticResource DataGridHeaderStyle}">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Produk" Binding="{Binding Name}" Width="2*"/>
+                    <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="110"/>
+                    <DataGridTextColumn Header="Stok" Binding="{Binding Stock, StringFormat={}{0:N2}}" Width="90">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#1E3A8A"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="Margin" Value="10,0"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="Satuan" Binding="{Binding Unit}" Width="85"/>
+                    <DataGridTextColumn Header="Harga Beli" Binding="{Binding PurchasePrice, StringFormat='Rp {0:N0}'}" Width="120"/>
+                    <DataGridTextColumn Header="Harga Jual" Binding="{Binding SellingPrice, StringFormat='Rp {0:N0}'}" Width="120"/>
+                    <DataGridTemplateColumn Header="Margin" Width="130">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Grid Margin="8,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="44"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ProgressBar Grid.Column="0" Minimum="0" Maximum="100" Height="8"
+                                                 Value="{Binding Margin, Mode=OneWay, TargetNullValue=0, FallbackValue=0}" Foreground="#10B981" Background="#E2E8F0"
+                                                 VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Margin, StringFormat={}{0:N0}%}"
+                                               FontSize="11" Foreground="#475569" VerticalAlignment="Center"
+                                               HorizontalAlignment="Right"/>
+                                </Grid>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Status" Width="110">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="10" Padding="8,4" HorizontalAlignment="Center">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="#DCFCE7"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding StockStatusText}" Value="Minus">
+                                                    <Setter Property="Background" Value="#FEE2E2"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding StockStatusText}" Value="Habis">
+                                                    <Setter Property="Background" Value="#FFEDD5"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding StockStatusText}" Value="Rendah">
+                                                    <Setter Property="Background" Value="#FEF9C3"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding StockStatusText}" FontSize="11" FontWeight="SemiBold">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="#166534"/>
                                                 <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding StockStatus}" Value="🔴 Habis">
-                                                        <Setter Property="Background" Value="#FEE2E2"/>
+                                                    <DataTrigger Binding="{Binding StockStatusText}" Value="Minus">
+                                                        <Setter Property="Foreground" Value="#991B1B"/>
                                                     </DataTrigger>
-                                                    <DataTrigger Binding="{Binding StockStatus}" Value="🔴 Minus">
-                                                        <Setter Property="Background" Value="#FEE2E2"/>
+                                                    <DataTrigger Binding="{Binding StockStatusText}" Value="Habis">
+                                                        <Setter Property="Foreground" Value="#9A3412"/>
                                                     </DataTrigger>
-                                                    <DataTrigger Binding="{Binding StockStatus}" Value="🟡 Rendah">
-                                                        <Setter Property="Background" Value="#FEF3C7"/>
+                                                    <DataTrigger Binding="{Binding StockStatusText}" Value="Rendah">
+                                                        <Setter Property="Foreground" Value="#854D0E"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
-                                        </Border.Style>
-                                        <TextBlock Text="{Binding StockStatus}" FontSize="10" FontWeight="SemiBold" Foreground="#059669">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding StockStatus}" Value="🔴 Habis">
-                                                            <Setter Property="Foreground" Value="#DC2626"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding StockStatus}" Value="🔴 Minus">
-                                                            <Setter Property="Foreground" Value="#DC2626"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding StockStatus}" Value="🟡 Rendah">
-                                                            <Setter Property="Foreground" Value="#D97706"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </Border>
-                                </DataTemplate>
-                            </GridViewColumn.CellTemplate>
-                            <GridViewColumn.HeaderContainerStyle>
-                                <Style TargetType="GridViewColumnHeader">
-                                    <Setter Property="Background" Value="#F9FAFB"/>
-                                    <Setter Property="Foreground" Value="#374151"/>
-                                    <Setter Property="FontWeight" Value="SemiBold"/>
-                                    <Setter Property="FontSize" Value="11"/>
-                                    <Setter Property="Padding" Value="12,8"/>
-                                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                </Style>
-                            </GridViewColumn.HeaderContainerStyle>
-                        </GridViewColumn>
-                    </GridView>
-                </ListView.View>
-                <ListView.ItemContainerStyle>
-                    <Style TargetType="ListViewItem">
-                        <Setter Property="Padding" Value="0"/>
-                        <Setter Property="Margin" Value="0"/>
-                        <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                        <Setter Property="BorderBrush" Value="#F3F4F6"/>
-                        <Setter Property="Background" Value="White"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#F9FAFB"/>
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="#ECFDF5"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-                </ListView.ItemContainerStyle>
-            </ListView>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
         </Border>
 
-        <!-- Footer -->
-        <Border Grid.Row="3" Background="White" CornerRadius="8" Padding="14,10">
-            <TextBlock x:Name="TxtProductCount" Text="0 produk" FontSize="11" Foreground="#6B7280"/>
+        <Border Grid.Row="4" Background="White" CornerRadius="8" Padding="14,10">
+            <TextBlock x:Name="TxtProductCount" Text="0 produk" FontSize="12" Foreground="#64748B"/>
         </Border>
     </Grid>
 </UserControl>

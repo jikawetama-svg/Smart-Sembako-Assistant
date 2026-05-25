@@ -88,7 +88,7 @@ namespace SmartSembakoAssistant.Services
             bool groqReady = !string.IsNullOrWhiteSpace(groqKey) && groqKey != "YOUR_GROQ_API_KEY";
             bool baileysReady = config.Baileys?.Enabled == true &&
                                 WhatsAppModes.UsesBaileys(waMode) &&
-                                !string.IsNullOrWhiteSpace(config.Baileys.BotPhoneNumber) &&
+                                !IsPlaceholderPhone(config.Baileys.BotPhoneNumber) &&
                                 (config.Baileys.OwnerNumbers?.Any() == true);
             bool telegramChosen = TelegramBotService.IsBotTokenFormatValid(config.Telegram?.BotToken);
             bool cloudReady = config.WhatsApp?.Enabled == true &&
@@ -189,6 +189,14 @@ namespace SmartSembakoAssistant.Services
         private static string GetDefaultNodeBinaryPath()
         {
             return "runtimes\\node\\node.exe";
+        }
+
+        private static bool IsPlaceholderPhone(string? value)
+        {
+            string normalized = AutomationEngine.NormalizeWhatsAppNumber(value);
+            return string.IsNullOrWhiteSpace(normalized) ||
+                   normalized == "6281234567890" ||
+                   normalized == "6280000000000";
         }
 
         private static void SeedNotificationThresholdDefaults(NotificationSettings notifications)
