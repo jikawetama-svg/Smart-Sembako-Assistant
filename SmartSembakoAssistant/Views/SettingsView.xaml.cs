@@ -79,8 +79,9 @@ namespace SmartSembakoAssistant.Views
 
                 TxtGroqApiKey.Text = NormalizeSecret(config.Groq.ApiKey, "YOUR_GROQ_API_KEY");
                 TxtGeminiApiKey.Text = NormalizeSecret(config.Groq.FallbackApiKey, "YOUR_GEMINI_API_KEY");
-                SelectComboItem(CmbGroqModel, config.Groq.Model ?? "llama-3.1-8b-instant");
-                SelectComboItem(CmbGeminiModel, config.Groq.FallbackModel ?? "gemini-3.1-flash-lite");
+                SelectComboItem(CmbGroqModel, config.Groq.Model ?? "llama-3.3-70b-versatile");
+                SelectComboItem(CmbGeminiModel, config.Groq.FallbackModel ?? "gemini-2.5-flash");
+                SelectComboItem(CmbGeminiVisionModel, config.Groq.VisionModel ?? config.Groq.FallbackModel ?? "gemini-2.5-flash");
                 TxtMaxTokens.Text = config.Groq.MaxTokens.ToString();
                 TxtTemperature.Text = config.Groq.Temperature.ToString("F1");
                 ChkEnableFallback.IsChecked = !string.IsNullOrWhiteSpace(TxtGeminiApiKey.Text);
@@ -134,6 +135,13 @@ namespace SmartSembakoAssistant.Views
                 ChkEnableBaileysLowStockAlerts.IsChecked = config.Automation.EnableBaileysLowStockAlerts;
                 ChkEnableDailySummary.IsChecked = config.Automation.EnableDailySummary;
                 TxtDailySummaryTime.Text = config.Automation.DailySummaryTime ?? "07:00";
+                ChkDualStockEnabled.IsChecked = config.Automation.EnableDualStockSync;
+                ChkDualStockRealtimeWatcherEnabled.IsChecked = config.Automation.EnableDualStockRealtimeWatcher;
+                ChkEnableTelegramDualStockAlerts.IsChecked = config.Automation.EnableTelegramDualStockAlerts;
+                ChkEnableWhatsAppCloudDualStockAlerts.IsChecked = config.Automation.EnableWhatsAppCloudDualStockAlerts;
+                ChkEnableBaileysDualStockAlerts.IsChecked = config.Automation.EnableBaileysDualStockAlerts;
+                TxtDualStockSyncInterval.Text = Math.Clamp(config.Automation.DualStockSyncIntervalSeconds, 5, 3600).ToString();
+                TxtDualStockDailySyncTime.Text = config.Automation.DualStockDailySyncTime ?? "21:00";
                 TxtAutomationTemplates.Text = string.Join(Environment.NewLine,
                     (config.Automation.Templates ?? new List<AutomationTemplate>())
                         .Select(t => $"{t.Key} - {t.Name}"));
@@ -257,6 +265,7 @@ namespace SmartSembakoAssistant.Views
             bool fallbackEnabled = ChkEnableFallback.IsChecked == true;
             TxtGeminiApiKey.IsEnabled = fallbackEnabled;
             CmbGeminiModel.IsEnabled = fallbackEnabled;
+            CmbGeminiVisionModel.IsEnabled = fallbackEnabled;
             BtnShowGeminiKey.IsEnabled = fallbackEnabled;
             BtnTestGemini.IsEnabled = fallbackEnabled;
 
@@ -493,9 +502,10 @@ namespace SmartSembakoAssistant.Views
             current.App ??= new AppSettings();
 
             current.Groq.ApiKey = string.IsNullOrWhiteSpace(TxtGroqApiKey.Text) ? "YOUR_GROQ_API_KEY" : TxtGroqApiKey.Text.Trim();
-            current.Groq.Model = GetComboValue(CmbGroqModel, "llama-3.1-8b-instant");
+            current.Groq.Model = GetComboValue(CmbGroqModel, "llama-3.3-70b-versatile");
             current.Groq.FallbackApiKey = ChkEnableFallback.IsChecked == true ? TxtGeminiApiKey.Text.Trim() : "";
-            current.Groq.FallbackModel = GetComboValue(CmbGeminiModel, "gemini-3.1-flash-lite");
+            current.Groq.FallbackModel = GetComboValue(CmbGeminiModel, "gemini-2.5-flash");
+            current.Groq.VisionModel = GetComboValue(CmbGeminiVisionModel, current.Groq.FallbackModel ?? "gemini-2.5-flash");
             current.Groq.MaxTokens = int.TryParse(TxtMaxTokens.Text, out var maxTokens) ? maxTokens : 500;
             current.Groq.Temperature = double.TryParse(TxtTemperature.Text, out var temperature) ? temperature : 0.7;
 
@@ -555,6 +565,17 @@ namespace SmartSembakoAssistant.Views
             current.Automation.EnableBaileysLowStockAlerts = ChkEnableBaileysLowStockAlerts.IsChecked == true;
             current.Automation.EnableDailySummary = ChkEnableDailySummary.IsChecked == true;
             current.Automation.DailySummaryTime = TxtDailySummaryTime.Text.Trim();
+            current.Automation.EnableDualStockSync = ChkDualStockEnabled.IsChecked == true;
+            current.Automation.EnableDualStockRealtimeWatcher = ChkDualStockRealtimeWatcherEnabled.IsChecked == true;
+            current.Automation.EnableTelegramDualStockAlerts = ChkEnableTelegramDualStockAlerts.IsChecked == true;
+            current.Automation.EnableWhatsAppCloudDualStockAlerts = ChkEnableWhatsAppCloudDualStockAlerts.IsChecked == true;
+            current.Automation.EnableBaileysDualStockAlerts = ChkEnableBaileysDualStockAlerts.IsChecked == true;
+            current.Automation.DualStockSyncIntervalSeconds = int.TryParse(TxtDualStockSyncInterval.Text, out var dualInterval)
+                ? Math.Clamp(dualInterval, 5, 3600)
+                : 15;
+            current.Automation.DualStockDailySyncTime = string.IsNullOrWhiteSpace(TxtDualStockDailySyncTime.Text)
+                ? "21:00"
+                : TxtDualStockDailySyncTime.Text.Trim();
             current.Automation.Templates ??= new List<AutomationTemplate>();
             current.Automation.Rules ??= new List<AutomationRule>();
 
@@ -1951,6 +1972,28 @@ namespace SmartSembakoAssistant.Views
             catch (Exception ex)
             {
                 ToastHelper.ShowError("Save Failed", ex.Message);
+            }
+        }
+
+        private async void BtnForceDailySync_Click(object sender, RoutedEventArgs e)
+        {
+            BtnForceDailySync.IsEnabled = false;
+            try
+            {
+                AppConfig draft = BuildDraftConfig();
+                _configService.ReplaceInMemoryConfig(draft, save: true);
+
+                var engine = CreateAutomationEngine();
+                string result = await engine.ForceDualStockDailySyncAsync(DateTime.Now, "manual settings button");
+                ToastHelper.ShowSuccess("Dual Stok", result, Window.GetWindow(this));
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Dual Stok", ex.Message, Window.GetWindow(this));
+            }
+            finally
+            {
+                BtnForceDailySync.IsEnabled = true;
             }
         }
 

@@ -17,7 +17,7 @@ namespace SmartSembakoAssistant.Views
         private readonly LoggingService _loggingService;
         private readonly PosDbService? _posDbService;
 
-        private readonly ObservableCollection<Product> _products = new();
+        private readonly ObservableCollection<StockDisplayItem> _products = new();
         private ICollectionView? _productsView;
         private DispatcherTimer? _searchDebounceTimer;
         private string _activeStockFilter = "Semua";
@@ -73,9 +73,10 @@ namespace SmartSembakoAssistant.Views
             {
                 SetLoading(true);
                 var products = await _posDbService.GetAllProductsAsync();
+                var displayItems = await BuildStockDisplayItemsAsync(products);
 
                 _products.Clear();
-                foreach (var product in products)
+                foreach (var product in displayItems)
                 {
                     _products.Add(product);
                 }
@@ -126,7 +127,9 @@ namespace SmartSembakoAssistant.Views
             {
                 var matchesName = product.Name?.ToLowerInvariant().Contains(searchText) == true;
                 var matchesSku = product.Sku?.ToLowerInvariant().Contains(searchText) == true;
-                if (!matchesName && !matchesSku)
+                var matchesFamily = item is StockDisplayItem displayItem &&
+                                    displayItem.ConversionRelationText?.ToLowerInvariant().Contains(searchText) == true;
+                if (!matchesName && !matchesSku && !matchesFamily)
                 {
                     return false;
                 }
@@ -192,6 +195,76 @@ namespace SmartSembakoAssistant.Views
         public async Task LoadDataAsync()
         {
             await LoadProductsAsync();
+        }
+
+        private async Task<List<StockDisplayItem>> BuildStockDisplayItemsAsync(List<Product> products)
+        {
+            var displayItems = products.Select(StockDisplayItem.FromProduct).ToList();
+            var productById = displayItems
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .GroupBy(product => product.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            foreach (var mapping in mappings.Where(mapping => mapping.ConversionRate > 0))
+            {
+                if (!productById.TryGetValue(mapping.ParentProductId, out var parent) ||
+                    !productById.TryGetValue(mapping.ChildProductId, out var child))
+                {
+                    continue;
+                }
+
+                decimal parentStock = parent.Stock ?? 0;
+                decimal childStock = child.Stock ?? 0;
+                decimal totalChild = parentStock * mapping.ConversionRate + childStock;
+                decimal totalParent = totalChild / mapping.ConversionRate;
+                string parentUnit = string.IsNullOrWhiteSpace(parent.Unit) ? "unit besar" : parent.Unit!;
+                string childUnit = string.IsNullOrWhiteSpace(child.Unit) ? "unit kecil" : child.Unit!;
+                string relation = $"1 {parentUnit} = {mapping.ConversionRate:0.##} {childUnit}";
+
+                parent.EffectiveStock = totalParent;
+                parent.EffectiveStockText = $"{totalParent:0.##} {parentUnit}";
+                parent.ConversionRelationText = $"{relation}; setara {totalChild:0.##} {childUnit}";
+
+                child.EffectiveStock = totalChild;
+                child.EffectiveStockText = $"{totalChild:0.##} {childUnit}";
+                child.ConversionRelationText = $"{relation}; gabungan {parentStock:0.##} {parentUnit} + {childStock:0.##} {childUnit}";
+            }
+
+            foreach (var item in displayItems.Where(item => string.IsNullOrWhiteSpace(item.EffectiveStockText)))
+            {
+                item.EffectiveStock = item.Stock ?? 0;
+                item.EffectiveStockText = "-";
+                item.ConversionRelationText = "Produk belum punya mapping dual stok.";
+            }
+
+            return displayItems;
+        }
+
+        public class StockDisplayItem : Product
+        {
+            public decimal? EffectiveStock { get; set; }
+            public string? EffectiveStockText { get; set; }
+            public string? ConversionRelationText { get; set; }
+
+            public static StockDisplayItem FromProduct(Product product)
+            {
+                return new StockDisplayItem
+                {
+                    Id = product.Id,
+                    Name = product.Name,
+                    Sku = product.Sku,
+                    Category = product.Category,
+                    Stock = product.Stock,
+                    PurchasePrice = product.PurchasePrice,
+                    SellingPrice = product.SellingPrice,
+                    Unit = product.Unit,
+                    ExpiryDate = product.ExpiryDate,
+                    BatchNumber = product.BatchNumber,
+                    IsActive = product.IsActive,
+                    SoldThisMonth = product.SoldThisMonth
+                };
+            }
         }
     }
 }

@@ -108,8 +108,6 @@
 
                     <TextBlock Text="Model" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <ComboBox x:Name="CmbGroqModel" Style="{StaticResource ComboStyle}" Margin="0,0,0,10">
-                        <ComboBoxItem Content="llama-3.1-8b-instant"/>
-                        <ComboBoxItem Content="llama-3.1-70b-versatile"/>
                         <ComboBoxItem Content="llama-3.3-70b-versatile"/>
                         <ComboBoxItem Content="gemma2-9b-it"/>
                     </ComboBox>
@@ -157,11 +155,17 @@
                     <TextBlock Style="{StaticResource HelpTextStyle}" Text="Opsional. Hanya dipakai jika fallback diaktifkan."/>
 
                     <TextBlock Text="Fallback Model" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
-                    <ComboBox x:Name="CmbGeminiModel" Style="{StaticResource ComboStyle}">
-                        <ComboBoxItem Content="gemma-4-31b-it"/>
-                        <ComboBoxItem Content="gemma-4-27b-it"/>
+                    <ComboBox x:Name="CmbGeminiModel" Style="{StaticResource ComboStyle}" Margin="0,0,0,10">
+                        <ComboBoxItem Content="gemini-2.5-flash"/>
+                        <ComboBoxItem Content="gemini-2.5-flash-lite"/>
                         <ComboBoxItem Content="gemini-3.1-flash-lite"/>
-                        <ComboBoxItem Content="gemini-3.1-flash-lite-preview"/>
+                    </ComboBox>
+
+                    <TextBlock Text="Vision OCR Model" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <ComboBox x:Name="CmbGeminiVisionModel" Style="{StaticResource ComboStyle}">
+                        <ComboBoxItem Content="gemini-2.5-flash"/>
+                        <ComboBoxItem Content="gemini-2.5-flash-lite"/>
+                        <ComboBoxItem Content="gemini-3.1-flash-lite"/>
                     </ComboBox>
                 </StackPanel>
             </Border>
@@ -416,6 +420,42 @@
 
                     <TextBlock Text="Default Templates" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <TextBox x:Name="TxtAutomationTemplates" Style="{StaticResource InputStyle}" IsReadOnly="True" AcceptsReturn="True" Height="110" TextWrapping="Wrap"/>
+
+                    <Border Background="#F8FAFC" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Pengaturan Dual Stok" FontSize="13" FontWeight="SemiBold" Foreground="#0F766E" Margin="0,0,0,10"/>
+                            <CheckBox x:Name="ChkDualStockEnabled" Content="Aktifkan sinkronisasi dual stok otomatis" Margin="0,0,0,10"/>
+                            <CheckBox x:Name="ChkDualStockRealtimeWatcherEnabled" Content="Aktifkan watcher realtime" Margin="0,0,0,6"/>
+
+                            <TextBlock Text="Channel Notifikasi Defisit Dual Stok" FontSize="11" Margin="0,4,0,5" Foreground="#374151"/>
+                            <CheckBox x:Name="ChkEnableTelegramDualStockAlerts" Content="Telegram" Margin="0,0,0,4"/>
+                            <CheckBox x:Name="ChkEnableWhatsAppCloudDualStockAlerts" Content="WhatsApp Cloud API (Meta)" Margin="0,0,0,4"/>
+                            <CheckBox x:Name="ChkEnableBaileysDualStockAlerts" Content="WhatsApp Baileys Lokal" Margin="0,0,0,10"/>
+
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Interval cek stok (detik)" FontSize="11" VerticalAlignment="Center" Foreground="#374151"/>
+                                <TextBox Grid.Column="1" x:Name="TxtDualStockSyncInterval" Style="{StaticResource InputStyle}" Width="90" HorizontalAlignment="Left"/>
+                            </Grid>
+
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="210"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Jam tutup toko" FontSize="11" VerticalAlignment="Center" Foreground="#374151"/>
+                                <TextBox Grid.Column="1" x:Name="TxtDualStockDailySyncTime" Style="{StaticResource InputStyle}" Width="90" HorizontalAlignment="Left"/>
+                            </Grid>
+
+                            <Button x:Name="BtnForceDailySync" Content="Jalankan Konsolidasi Akhir Hari Sekarang"
+                                    Style="{StaticResource SaveButtonStyle}" Width="270" HorizontalAlignment="Left"
+                                    Click="BtnForceDailySync_Click"/>
+                            <TextBlock Style="{StaticResource HelpTextStyle}" Text="Watcher memakai pointer dokumen terakhir sehingga aman saat aplikasi mati lalu dibuka kembali."/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </Border>
 

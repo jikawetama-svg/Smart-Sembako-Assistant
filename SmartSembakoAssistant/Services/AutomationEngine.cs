@@ -284,6 +284,10 @@ namespace SmartSembakoAssistant.Services
         private const string StateLastReceivableAlertDate = "automation.last_receivable_alert_date";
         private const string StateLastExpiryAlertDate = "automation.last_expiry_alert_date";
         private const string StateLastAnomalyAlertDate = "automation.last_anomaly_alert_date";
+        private const string StateLastDualStockWatcherDocumentId = "last_processed_pos_document_id";
+        private const string StateLegacyLastDualStockWatcherDocumentId = "automation.dual_stock_watcher.last_document_id";
+        private const string StateLastDualStockDailySyncDate = "automation.dual_stock.last_daily_sync_date";
+        private const string DualStockInternalNotePrefix = "SSA DualStock";
         private const decimal InventoryLargeAdjustmentThreshold = 50m;
         private const decimal InventorySpikeMultiplier = 3m;
         private const float OcrVisionFallbackConfidenceThreshold = 0.62f;
@@ -674,9 +678,14 @@ namespace SmartSembakoAssistant.Services
                 _lastLowStockAlertDate != DateTime.Today)
             {
                 var critical = await _posDbService.GetCriticalStockProductsAsync();
-                if (critical.Any() && ShouldExecuteBackgroundTrigger("StockAlert", critical.Min(x => x.Stock ?? 0), out _))
+                var dualStockDeficits = await GetDualStockDeficitFamiliesAsync();
+                bool shouldSendCritical = critical.Any() &&
+                    ShouldExecuteBackgroundTrigger("StockAlert", critical.Min(x => x.Stock ?? 0), out _);
+                if (shouldSendCritical || dualStockDeficits.Any())
                 {
-                    outputs.AddRange(BuildLowStockAlertBroadcasts(BuildCriticalStockResponse(critical), "StockAlert"));
+                    outputs.AddRange(BuildLowStockAlertBroadcasts(
+                        BuildCriticalStockResponse(critical, dualStockDeficits),
+                        "StockAlert"));
                 }
 
                 _lastLowStockAlertDate = DateTime.Today;
@@ -759,6 +768,564 @@ namespace SmartSembakoAssistant.Services
 
             return outputs;
         }
+
+        public async Task StartDatabaseSyncWatcherAsync(CancellationToken token)
+        {
+            if (!IsDualStockRealtimeWatcherEnabled())
+            {
+                return;
+            }
+
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await RunDatabaseSyncWatcherAsync();
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Dual stock watcher error: {ex.Message}",
+                        "DualStockWatcher",
+                        ex.ToString());
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(GetDualStockSyncIntervalSeconds()), token);
+            }
+        }
+
+        public async Task<List<OutboundMessage>> RunDatabaseSyncWatcherAsync()
+        {
+            var outputs = new List<OutboundMessage>();
+            if (_posDbService == null || _configService.Config?.Automation?.EnableDualStockSync == false)
+            {
+                return outputs;
+            }
+
+            string? cursorValue = _databaseService.GetRuntimeState(StateLastDualStockWatcherDocumentId);
+            cursorValue ??= _databaseService.GetRuntimeState(StateLegacyLastDualStockWatcherDocumentId);
+            if (!long.TryParse(cursorValue, out long lastDocumentId))
+            {
+                long latest = await _posDbService.GetLatestStockMutationDocumentIdAsync();
+                await _databaseService.SetRuntimeStateAsync(StateLastDualStockWatcherDocumentId, latest.ToString(CultureInfo.InvariantCulture));
+                return outputs;
+            }
+
+            var mutations = await _posDbService.GetStockMutationDocumentsAfterAsync(lastDocumentId, 100);
+            if (!mutations.Any())
+            {
+                return outputs;
+            }
+
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            foreach (var documentGroup in mutations.GroupBy(item => item.DocumentId).OrderBy(group => group.Key))
+            {
+                var first = documentGroup.First();
+                try
+                {
+                    DateTime documentTimestamp = first.Date.AddSeconds(1);
+                    if (!IsDualStockInternalMutation(first.InternalNote))
+                    {
+                        var affectedMappings = documentGroup
+                            .Select(item => FindMappingForProduct(mappings, item.ProductId))
+                            .Where(mapping => mapping != null)
+                            .Cast<UnitConversionMapping>()
+                            .GroupBy(mapping => mapping.Id, StringComparer.OrdinalIgnoreCase)
+                            .Select(group => group.First())
+                            .ToList();
+
+                        foreach (var mapping in affectedMappings)
+                        {
+                            if (first.DocumentTypeId == 3)
+                            {
+                                foreach (var mutation in documentGroup)
+                                {
+                                    if (string.Equals(mutation.ProductId, mapping.ParentProductId, StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(mutation.ProductId, mapping.ChildProductId, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        await ReconcileCompanionMinusAsync(
+                                            mapping,
+                                            mutation.ProductId,
+                                            mutation.Date.AddSeconds(1),
+                                            first.DocumentId,
+                                            mapping.Id);
+                                    }
+                                }
+                            }
+
+                            string? alert = await EvaluateFamilyEquilibriumAsync(
+                                mapping,
+                                documentTimestamp,
+                                "watcher equilibrium",
+                                first.DocumentId,
+                                mapping.Id);
+                            if (!string.IsNullOrWhiteSpace(alert))
+                            {
+                                outputs.AddRange(BuildDualStockAlertBroadcasts(alert, "DualStockWatcher"));
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Dual stock watcher gagal memproses dokumen {documentGroup.Key}: {ex.Message}",
+                        "DualStockWatcher",
+                        ex.ToString());
+                }
+                finally
+                {
+                    lastDocumentId = Math.Max(lastDocumentId, documentGroup.Key);
+                    await _databaseService.SetRuntimeStateAsync(StateLastDualStockWatcherDocumentId, lastDocumentId.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            return outputs;
+        }
+
+        public async Task<List<OutboundMessage>> RunDualStockScheduledSyncAsync()
+        {
+            var outputs = new List<OutboundMessage>();
+            var automation = _configService.Config?.Automation;
+            if (_posDbService == null || automation?.EnableDualStockSync == false)
+            {
+                return outputs;
+            }
+
+            if (!TimeSpan.TryParse(automation.DualStockDailySyncTime ?? "21:00", out var syncTime))
+            {
+                syncTime = TimeSpan.FromHours(21);
+            }
+
+            DateTime todaySyncAt = DateTime.Today.Add(syncTime);
+            if (DateTime.Now < todaySyncAt)
+            {
+                return outputs;
+            }
+
+            if (DateTime.TryParse(_databaseService.GetRuntimeState(StateLastDualStockDailySyncDate), out var lastSyncDate) &&
+                lastSyncDate.Date >= DateTime.Today)
+            {
+                return outputs;
+            }
+
+            var scan = await RunDualStockEquilibriumScanAsync(todaySyncAt, "scheduled close-time sync");
+            if (scan.Alerts.Any())
+            {
+                outputs.AddRange(BuildDualStockAlertBroadcasts(
+                    BuildDualStockAlertMessage(scan.Alerts),
+                    "DualStockScheduledSync"));
+            }
+
+            await _databaseService.SetRuntimeStateAsync(StateLastDualStockDailySyncDate, DateTime.Today.ToString("yyyy-MM-dd"));
+            return outputs;
+        }
+
+        public async Task RunDualStockStartupCatchUpAsync()
+        {
+            var automation = _configService.Config?.Automation;
+            if (_posDbService == null || automation?.EnableDualStockSync == false)
+            {
+                return;
+            }
+
+            if (!TimeSpan.TryParse(automation.DualStockDailySyncTime ?? "21:00", out var syncTime))
+            {
+                syncTime = TimeSpan.FromHours(21);
+            }
+
+            DateTime yesterday = DateTime.Today.AddDays(-1);
+            if (DateTime.TryParse(_databaseService.GetRuntimeState(StateLastDualStockDailySyncDate), out var lastSyncDate) &&
+                lastSyncDate.Date >= yesterday)
+            {
+                return;
+            }
+
+            var watcherMessages = await RunDatabaseSyncWatcherAsync();
+            await EnqueueOutboundMessagesAsync(watcherMessages);
+
+            var scan = await RunDualStockEquilibriumScanAsync(yesterday.Add(syncTime), "startup catch-up daily sync");
+            if (scan.Alerts.Any())
+            {
+                await EnqueueOutboundMessagesAsync(BuildDualStockAlertBroadcasts(
+                    BuildDualStockAlertMessage(scan.Alerts),
+                    "DualStockStartupCatchUp"));
+            }
+
+            await _databaseService.SetRuntimeStateAsync(StateLastDualStockDailySyncDate, yesterday.ToString("yyyy-MM-dd"));
+        }
+
+        public async Task<string> ForceDualStockDailySyncAsync(DateTime? documentTimestamp = null, string reason = "manual daily sync")
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            if (_configService.Config?.Automation?.EnableDualStockSync == false)
+            {
+                return "Dual stock sync nonaktif di Settings.";
+            }
+
+            var scan = await RunDualStockEquilibriumScanAsync(documentTimestamp ?? DateTime.Now, reason);
+
+            await _databaseService.SetRuntimeStateAsync(
+                StateLastDualStockDailySyncDate,
+                (documentTimestamp ?? DateTime.Now).Date.ToString("yyyy-MM-dd"));
+
+            string alertInfo = scan.Alerts.Any()
+                ? $" Alert defisit: {scan.Alerts.Count}."
+                : string.Empty;
+            return $"Konsolidasi dual stok selesai. {scan.Processed} mapping keluarga dievaluasi.{alertInfo}";
+        }
+
+        public async Task RunDualStockShutdownSyncAsync()
+        {
+            var automation = _configService.Config?.Automation;
+            if (_posDbService == null || automation?.EnableDualStockSync == false)
+            {
+                return;
+            }
+
+            var watcherMessages = await RunDatabaseSyncWatcherAsync();
+            await EnqueueOutboundMessagesAsync(watcherMessages);
+
+            var scan = await RunDualStockEquilibriumScanAsync(DateTime.Now, "app shutdown sync");
+            if (scan.Alerts.Any())
+            {
+                await EnqueueOutboundMessagesAsync(BuildDualStockAlertBroadcasts(
+                    BuildDualStockAlertMessage(scan.Alerts),
+                    "DualStockShutdownSync"));
+            }
+        }
+
+        public int GetDualStockSyncIntervalSeconds()
+        {
+            int value = _configService.Config?.Automation?.DualStockSyncIntervalSeconds ?? 15;
+            return Math.Clamp(value, 5, 3600);
+        }
+
+        public bool IsDualStockRealtimeWatcherEnabled()
+        {
+            var automation = _configService.Config?.Automation;
+            return automation?.EnableDualStockSync != false &&
+                   automation?.EnableDualStockRealtimeWatcher == true;
+        }
+
+        private static UnitConversionMapping? FindMappingForProduct(IEnumerable<UnitConversionMapping> mappings, string? productId)
+        {
+            if (string.IsNullOrWhiteSpace(productId))
+            {
+                return null;
+            }
+
+            return mappings.FirstOrDefault(mapping =>
+                string.Equals(mapping.ParentProductId, productId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(mapping.ChildProductId, productId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsDualStockInternalMutation(string? internalNote)
+        {
+            if (string.IsNullOrWhiteSpace(internalNote))
+            {
+                return false;
+            }
+
+            return internalNote.Contains(DualStockInternalNotePrefix, StringComparison.OrdinalIgnoreCase) ||
+                   internalNote.Contains("SSA shadow conversion", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task ReconcileCompanionMinusAsync(
+            UnitConversionMapping mapping,
+            string changedProductId,
+            DateTime? documentTimestamp = null,
+            long? triggerDocumentId = null,
+            string? triggerMappingId = null)
+        {
+            if (_posDbService == null)
+            {
+                return;
+            }
+
+            bool changedParent = string.Equals(changedProductId, mapping.ParentProductId, StringComparison.OrdinalIgnoreCase);
+            string companionId = changedParent ? mapping.ChildProductId : mapping.ParentProductId;
+            var changed = await _posDbService.GetProductByIdAsync(changedProductId);
+            var companion = await _posDbService.GetProductByIdAsync(companionId);
+            if (changed == null || companion == null)
+            {
+                return;
+            }
+
+            decimal changedStock = changed.Stock ?? 0;
+            decimal companionStock = companion.Stock ?? 0;
+            if (changedStock < 0 || companionStock >= 0)
+            {
+                return;
+            }
+
+            const string action = "zero-baseline";
+            string mappingToken = triggerMappingId ?? mapping.Id;
+            if (await IsDuplicateDualStockTriggerAsync(triggerDocumentId, mappingToken, action))
+            {
+                await _loggingService.LogInfoAsync(
+                    $"Dual stock zero-baseline dilewati karena trigger {triggerDocumentId} untuk mapping {mappingToken} sudah diproses.",
+                    "DualStockWatcher");
+                return;
+            }
+
+            await CreateDualStockInventoryDocumentAsync(
+                new[]
+                {
+                    new DualStockTarget(companion, 0)
+                },
+                AppendDualStockTriggerMetadata(
+                    $"{DualStockInternalNotePrefix}: zero-baseline companion minus after direct Aronium opname",
+                    triggerDocumentId,
+                    mappingToken,
+                    action),
+                documentTimestamp: documentTimestamp);
+
+            await _loggingService.LogInfoAsync(
+                $"Dual stock zero-baseline: {companion.Name} diset 0 dari {companionStock} setelah opname {changed.Name}.",
+                "DualStockWatcher");
+        }
+
+        private async Task<string?> EvaluateFamilyEquilibriumAsync(
+            UnitConversionMapping mapping,
+            DateTime? documentTimestamp = null,
+            string reason = "watcher equilibrium",
+            long? triggerDocumentId = null,
+            string? triggerMappingId = null)
+        {
+            if (_posDbService == null || mapping.ConversionRate <= 0)
+            {
+                return null;
+            }
+
+            var parent = await _posDbService.GetProductByIdAsync(mapping.ParentProductId);
+            var child = await _posDbService.GetProductByIdAsync(mapping.ChildProductId);
+            if (parent == null || child == null)
+            {
+                return null;
+            }
+
+            decimal rate = mapping.ConversionRate;
+            decimal parentStock = parent.Stock ?? 0;
+            decimal childStock = child.Stock ?? 0;
+
+            if (childStock <= -rate)
+            {
+                const string action = "auto-break";
+                string mappingToken = triggerMappingId ?? mapping.Id;
+                if (await IsDuplicateDualStockTriggerAsync(triggerDocumentId, mappingToken, action))
+                {
+                    await _loggingService.LogInfoAsync(
+                        $"Dual stock auto-break dilewati karena trigger {triggerDocumentId} untuk mapping {mappingToken} sudah diproses.",
+                        "DualStockWatcher");
+                    return null;
+                }
+
+                decimal fullBreaks = decimal.Floor(Math.Abs(childStock) / rate);
+                if (fullBreaks <= 0)
+                {
+                    return null;
+                }
+
+                decimal availableFullParents = parentStock >= 1 ? decimal.Floor(parentStock) : 0;
+                decimal breakQty = availableFullParents > 0
+                    ? Math.Min(fullBreaks, availableFullParents)
+                    : fullBreaks;
+                if (breakQty <= 0)
+                {
+                    breakQty = 1;
+                }
+
+                decimal targetParent = parentStock - breakQty;
+                decimal targetChild = childStock + breakQty * rate;
+                var result = await CreateDualStockInventoryDocumentAsync(
+                    new[]
+                    {
+                        new DualStockTarget(parent, targetParent),
+                        new DualStockTarget(child, targetChild)
+                    },
+                    AppendDualStockTriggerMetadata(
+                        $"{DualStockInternalNotePrefix}: auto-break {FormatStockValue(breakQty)} {GetUnitLabel(parent.Unit)} -> {FormatStockValue(breakQty * rate)} {GetUnitLabel(child.Unit)} | {reason}",
+                        triggerDocumentId,
+                        mappingToken,
+                        action),
+                    allowNegativeTargets: true,
+                    documentTimestamp: documentTimestamp);
+
+                if (!result.Success)
+                {
+                    await _loggingService.LogWarningAsync(
+                        $"Dual stock auto-break gagal untuk {mapping.ParentProductName}: {result.Error}",
+                        "DualStockWatcher");
+                    return null;
+                }
+
+                await _loggingService.LogInfoAsync(
+                    $"Dual stock auto-break: {parent.Name} {parentStock}->{targetParent}, {child.Name} {childStock}->{targetChild}.",
+                    "DualStockWatcher");
+
+                decimal totalChild = targetParent * rate + targetChild;
+                if (targetParent < 0 || totalChild <= 0)
+                {
+                    return $"{IconWarning} Dual stock auto-break: {FormatOptional(mapping.FamilyName ?? parent.Name)} sekarang defisit. " +
+                           $"{FormatOptional(parent.Name)} {FormatStockValue(targetParent)} {GetUnitLabel(parent.Unit)}, " +
+                           $"{FormatOptional(child.Name)} {FormatStockValue(targetChild)} {GetUnitLabel(child.Unit)}. " +
+                           "Input restock atau lakukan opname fisik.";
+                }
+
+                return null;
+            }
+
+            if (childStock >= rate)
+            {
+                const string action = "auto-pack";
+                string mappingToken = triggerMappingId ?? mapping.Id;
+                if (await IsDuplicateDualStockTriggerAsync(triggerDocumentId, mappingToken, action))
+                {
+                    await _loggingService.LogInfoAsync(
+                        $"Dual stock auto-pack dilewati karena trigger {triggerDocumentId} untuk mapping {mappingToken} sudah diproses.",
+                        "DualStockWatcher");
+                    return null;
+                }
+
+                decimal packQty = decimal.Floor(childStock / rate);
+                if (packQty <= 0)
+                {
+                    return null;
+                }
+
+                decimal targetParent = parentStock + packQty;
+                decimal targetChild = childStock - packQty * rate;
+                var result = await CreateDualStockInventoryDocumentAsync(
+                    new[]
+                    {
+                        new DualStockTarget(parent, targetParent),
+                        new DualStockTarget(child, targetChild)
+                    },
+                    AppendDualStockTriggerMetadata(
+                        $"{DualStockInternalNotePrefix}: auto-pack {FormatStockValue(packQty * rate)} {GetUnitLabel(child.Unit)} -> {FormatStockValue(packQty)} {GetUnitLabel(parent.Unit)} | {reason}",
+                        triggerDocumentId,
+                        mappingToken,
+                        action),
+                    allowNegativeTargets: true,
+                    documentTimestamp: documentTimestamp);
+
+                if (!result.Success)
+                {
+                    await _loggingService.LogWarningAsync(
+                        $"Dual stock auto-pack gagal untuk {mapping.ParentProductName}: {result.Error}",
+                        "DualStockWatcher");
+                    return null;
+                }
+
+                await _loggingService.LogInfoAsync(
+                    $"Dual stock auto-pack: {parent.Name} {parentStock}->{targetParent}, {child.Name} {childStock}->{targetChild}.",
+                    "DualStockWatcher");
+            }
+
+            return null;
+        }
+
+        private async Task<DualStockScanResult> RunDualStockEquilibriumScanAsync(DateTime documentTimestamp, string reason)
+        {
+            var alerts = new List<string>();
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            int processed = 0;
+            foreach (var mapping in mappings.Where(mapping => mapping.ConversionRate > 0))
+            {
+                string? alert = await EvaluateFamilyEquilibriumAsync(mapping, documentTimestamp, reason);
+                if (!string.IsNullOrWhiteSpace(alert))
+                {
+                    alerts.Add(alert);
+                }
+
+                processed++;
+            }
+
+            return new DualStockScanResult(processed, alerts);
+        }
+
+        private async Task<bool> IsDuplicateDualStockTriggerAsync(long? triggerDocumentId, string? mappingId, string action)
+        {
+            if (_posDbService == null ||
+                !triggerDocumentId.HasValue ||
+                triggerDocumentId.Value <= 0 ||
+                string.IsNullOrWhiteSpace(mappingId) ||
+                string.IsNullOrWhiteSpace(action))
+            {
+                return false;
+            }
+
+            return await _posDbService.HasDualStockDocumentForTriggerAsync(triggerDocumentId.Value, mappingId, action);
+        }
+
+        private static string AppendDualStockTriggerMetadata(string internalNote, long? triggerDocumentId, string? mappingId, string action)
+        {
+            if (!triggerDocumentId.HasValue ||
+                triggerDocumentId.Value <= 0 ||
+                string.IsNullOrWhiteSpace(mappingId) ||
+                string.IsNullOrWhiteSpace(action))
+            {
+                return internalNote;
+            }
+
+            return $"{internalNote} | trigger={triggerDocumentId.Value} | map={mappingId} | action={action}";
+        }
+
+        private async Task<BulkDocumentResult> CreateDualStockInventoryDocumentAsync(
+            IEnumerable<DualStockTarget> targets,
+            string internalNote,
+            bool allowNegativeTargets = false,
+            DateTime? documentTimestamp = null)
+        {
+            if (_posDbService == null)
+            {
+                return new BulkDocumentResult { Success = false, Error = "Database pos.db belum dikonfigurasi." };
+            }
+
+            var inputs = new List<BulkDocumentItemInput>();
+            foreach (var target in targets)
+            {
+                if (string.IsNullOrWhiteSpace(target.Product.Id) ||
+                    !int.TryParse(target.Product.Id, out int productId))
+                {
+                    continue;
+                }
+
+                inputs.Add(new BulkDocumentItemInput
+                {
+                    ProductId = productId,
+                    ProductName = target.Product.Name ?? target.Product.Id,
+                    Quantity = target.TargetStock,
+                    Price = target.Product.SellingPrice ?? 0,
+                    CurrentStock = target.Product.Stock,
+                    Unit = target.Product.Unit
+                });
+            }
+
+            if (!inputs.Any())
+            {
+                return new BulkDocumentResult { Success = false, Error = "Tidak ada target dual stock valid." };
+            }
+
+            return await _posDbService.CreateBulkInventoryCountDocumentAsync(
+                inputs,
+                1,
+                internalNote,
+                allowNegativeTargets,
+                documentTimestamp);
+        }
+
+        private sealed record DualStockScanResult(int Processed, List<string> Alerts);
+        private sealed record DualStockTarget(Product Product, decimal TargetStock);
 
         public async Task<long> EnqueueOutboundMessageAsync(OutboundMessage outbound)
         {
@@ -1242,6 +1809,7 @@ namespace SmartSembakoAssistant.Services
                 "/inputstruk" => CanUseOperationalFeatures(context) ? await HandleTextReceiptAsync(message, context, _configService.Config?.OcrReceipt, args) : BuildOwnerOnlyDeniedMessage(),
                 "/selesai_struk" => CanUseOperationalFeatures(context) ? await HandleFinishOcrSessionAsync(message, context) : BuildOwnerOnlyDeniedMessage(),
                 "/inventory" or "/quick_inventory" => CanUseOperationalFeatures(context) ? await QueueInventoryAsync(message, args) : "Akses ditolak. Fitur inventory hanya untuk owner/kasir.",
+                "/inventory_family" => CanUseOperationalFeatures(context) ? await QueueInventoryFamilyAsync(message, args) : "Akses ditolak. Fitur inventory family hanya untuk owner/kasir.",
                 "/analisa" => context.IsOwner ? await HandleAnalysisAsync() : "Akses ditolak. Fitur analisa hanya untuk owner.",
                 "/analisa_stok" => context.IsOwner ? await HandleStockMovementAnalysisAsync() : "Akses ditolak. Fitur analisa stok hanya untuk owner.",
                 "/cek_modal" => context.IsOwner ? await HandleZeroCostAsync() : "Akses ditolak. Fitur cek modal hanya untuk owner.",
@@ -1253,6 +1821,12 @@ namespace SmartSembakoAssistant.Services
                 "/stok_kategori" => CanUseOperationalFeatures(context) ? await HandleCategorySearchAsync(args, context) : "Akses ditolak. Fitur stok kategori hanya untuk owner/kasir.",
                 "/shadow_stok" => context.IsOwner ? await HandleShadowStockAsync() : "Akses ditolak. Fitur shadow stok hanya untuk owner.",
                 "/stok_efektif" => context.IsOwner ? await HandleEffectiveStockAsync(args) : "Akses ditolak. Fitur stok efektif hanya untuk owner.",
+                "/list_family" => context.IsOwner ? await HandleListFamilyAsync(args) : "Akses ditolak. Fitur list family hanya untuk owner.",
+                "/dual_stock" or "/dualstok" => context.IsOwner ? await HandleDualStockCommandAsync(args) : "Akses ditolak. Fitur dual stock hanya untuk owner.",
+                "/dual_stock_alert" => context.IsOwner ? await HandleDualStockAlertCommandAsync() : "Akses ditolak. Fitur dual stock alert hanya untuk owner.",
+                "/dual_stock_sync" => context.IsOwner ? await HandleDualStockSyncCommandAsync() : "Akses ditolak. Fitur dual stock sync hanya untuk owner.",
+                "/dual_stock_watcher" => context.IsOwner ? HandleDualStockWatcherCommand(args) : "Akses ditolak. Fitur dual stock watcher hanya untuk owner.",
+                "/dual_stock_channel" => context.IsOwner ? HandleDualStockChannelCommand(args) : "Akses ditolak. Fitur dual stock channel hanya untuk owner.",
                 "/set_family" => context.IsOwner ? await HandleSetFamilyFlexibleAsync(args, context) : "Akses ditolak. Fitur set family hanya untuk owner.",
                 "/hapus_family" => context.IsOwner ? await HandleDeleteFamilyAsync(args) : "Akses ditolak. Fitur hapus family hanya untuk owner.",
                 "/riwayat_restock" => CanUseOperationalFeatures(context) ? await HandleRestockHistoryAsync(args) : "Akses ditolak. Fitur riwayat restock hanya untuk owner/kasir.",
@@ -1307,6 +1881,12 @@ namespace SmartSembakoAssistant.Services
                 SetTopicState(context, "produk", entityId: first.Id, entityName: first.Name ?? searchQuery);
             }
 
+            string? familyResponse = await TryBuildFamilyStockResponseAsync(searchQuery, products);
+            if (!string.IsNullOrWhiteSpace(familyResponse))
+            {
+                return familyResponse;
+            }
+
             var result = new StringBuilder();
             result.AppendLine($"{IconSearch} Stok \"{searchQuery}\":");
             result.AppendLine();
@@ -1316,6 +1896,75 @@ namespace SmartSembakoAssistant.Services
             }
 
             return result.ToString().TrimEnd();
+        }
+
+        private async Task<string?> TryBuildFamilyStockResponseAsync(string query, List<Product> matchedProducts)
+        {
+            if (_posDbService == null)
+            {
+                return null;
+            }
+
+            var matchedIds = matchedProducts
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .Select(product => product.Id!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!matchedIds.Any())
+            {
+                return null;
+            }
+
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            var mapping = mappings.FirstOrDefault(item =>
+                matchedIds.Contains(item.ParentProductId) ||
+                matchedIds.Contains(item.ChildProductId));
+            if (mapping == null || mapping.ConversionRate <= 0)
+            {
+                return null;
+            }
+
+            var allProducts = await _posDbService.GetAllProductsAsync();
+            var productById = allProducts
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .GroupBy(product => product.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            if (!productById.TryGetValue(mapping.ParentProductId, out var parent) ||
+                !productById.TryGetValue(mapping.ChildProductId, out var child))
+            {
+                return null;
+            }
+
+            var family = new ProductFamilyStock
+            {
+                Mapping = mapping,
+                ParentProduct = parent,
+                ChildProduct = child,
+                ParentStock = parent.Stock ?? 0,
+                ChildStock = child.Stock ?? 0,
+                ConversionRate = mapping.ConversionRate
+            };
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconSearch} Hasil Pencarian \"{query}\":");
+            sb.AppendLine();
+            sb.AppendLine(GroqService.FormatDualStockResponse(family, query));
+
+            var otherMatches = matchedProducts
+                .Where(product => !string.Equals(product.Id, mapping.ParentProductId, StringComparison.OrdinalIgnoreCase) &&
+                                  !string.Equals(product.Id, mapping.ChildProductId, StringComparison.OrdinalIgnoreCase))
+                .Take(5)
+                .ToList();
+            if (otherMatches.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Produk lainnya:");
+                foreach (var product in otherMatches)
+                {
+                    sb.AppendLine(BuildStockSearchLine(product));
+                }
+            }
+
+            return sb.ToString().TrimEnd();
         }
 
         private async Task<string> HandleReportAsync(bool isOwner, string args = "")
@@ -2489,6 +3138,101 @@ namespace SmartSembakoAssistant.Services
             return BuildInventoryConfirmationMessage(product.Name ?? productQuery, product.Unit, currentStock, targetStock, adjustment);
         }
 
+        private async Task<string> QueueInventoryFamilyAsync(InboundMessage message, string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var match = Regex.Match(args.Trim(), @"^(?<name>.+?)\s+(?<qty>-?\d+(?:[.,]\d+)?)\s*(?<unit>[A-Za-z]+)?$", RegexOptions.IgnoreCase);
+            if (!match.Success || !TryParseDecimal(match.Groups["qty"].Value, out decimal targetQuantity) || targetQuantity < 0)
+            {
+                return "Format: /inventory_family <nama produk keluarga> <stok_target> <unit>\nContoh: /inventory_family kapal api mix 22 rcg";
+            }
+
+            string productQuery = match.Groups["name"].Value.Trim();
+            string requestedUnit = match.Groups["unit"].Success ? match.Groups["unit"].Value.Trim() : string.Empty;
+            var (product, error) = await TryResolveProductAsync(productQuery, isMutation: true, actionLabel: "inventory family");
+            if (product == null || !string.IsNullOrWhiteSpace(error) || string.IsNullOrWhiteSpace(product.Id))
+            {
+                return error ?? $"Produk \"{productQuery}\" tidak ditemukan.";
+            }
+
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            var mapping = FindMappingForProduct(mappings, product.Id);
+            if (mapping == null || mapping.ConversionRate <= 0)
+            {
+                return $"Produk \"{product.Name}\" belum punya mapping dual stok. Buat dulu dengan /set_family.";
+            }
+
+            var parent = await _posDbService.GetProductByIdAsync(mapping.ParentProductId);
+            var child = await _posDbService.GetProductByIdAsync(mapping.ChildProductId);
+            if (parent == null || child == null)
+            {
+                return "Produk parent/child pada mapping tidak ditemukan di pos.db.";
+            }
+
+            bool unitAsParent = IsRequestedFamilyParentUnit(requestedUnit, parent.Unit) ||
+                                (string.IsNullOrWhiteSpace(requestedUnit) &&
+                                 string.Equals(product.Id, mapping.ParentProductId, StringComparison.OrdinalIgnoreCase));
+            decimal targetTotalChild = unitAsParent
+                ? targetQuantity * mapping.ConversionRate
+                : targetQuantity;
+            decimal targetParent = decimal.Floor(targetTotalChild / mapping.ConversionRate);
+            decimal targetChild = targetTotalChild - targetParent * mapping.ConversionRate;
+
+            var items = new List<BulkPendingItem>
+            {
+                new()
+                {
+                    ProductId = mapping.ParentProductId,
+                    ProductName = parent.Name ?? mapping.ParentProductName ?? mapping.ParentProductId,
+                    Quantity = targetParent,
+                    CurrentStock = parent.Stock,
+                    Unit = parent.Unit
+                },
+                new()
+                {
+                    ProductId = mapping.ChildProductId,
+                    ProductName = child.Name ?? mapping.ChildProductName ?? mapping.ChildProductId,
+                    Quantity = targetChild,
+                    CurrentStock = child.Stock,
+                    Unit = child.Unit
+                }
+            };
+
+            string key = GetConfirmationKey(message.Channel, message.SenderId);
+            await _databaseService.SavePendingConfirmationAsync(new PendingConfirmation
+            {
+                Key = key,
+                Command = "bulk_inventory",
+                ProductId = SerializeBulkItems(items),
+                ProductName = $"Inventory family {mapping.FamilyName ?? parent.Name}",
+                Quantity = targetTotalChild,
+                CorrelationId = message.CorrelationId,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            });
+
+            string confirmation = BuildBulkInventoryConfirmationMessage(items, new List<string>(), new List<string>());
+            string targetSummary = $"Target keluarga: {FormatStockValue(targetTotalChild)} {GetUnitLabel(child.Unit)} efektif " +
+                                   $"= {FormatStockValue(targetParent)} {GetUnitLabel(parent.Unit)} + {FormatStockValue(targetChild)} {GetUnitLabel(child.Unit)}";
+            return confirmation.Replace(BuildConfirmationActions(), targetSummary + Environment.NewLine + Environment.NewLine + BuildConfirmationActions());
+        }
+
+        private static bool IsRequestedFamilyParentUnit(string requestedUnit, string? parentUnit)
+        {
+            if (string.IsNullOrWhiteSpace(requestedUnit))
+            {
+                return false;
+            }
+
+            string normalized = NormalizeReceiptUnit(requestedUnit);
+            return string.Equals(normalized, NormalizeReceiptUnit(parentUnit), StringComparison.OrdinalIgnoreCase) ||
+                   IsBulkReceiptUnit(normalized);
+        }
+
         private async Task<string> ConfirmPendingActionAsync(InboundMessage message, AutomationExecutionContext? context = null)
         {
             if (_posDbService == null)
@@ -3200,11 +3944,15 @@ namespace SmartSembakoAssistant.Services
                 });
             }
 
-            pricePayload ??= await BuildPriceOverridePayloadAsync(pending, items, includeShadow: false);
+            pricePayload ??= await BuildPriceOverridePayloadAsync(pending, items, includeShadow: true);
             if (decision == null && ShouldPromptPriceOverride(pricePayload))
             {
                 return await QueuePriceOverrideConfirmationAsync(message, pending, pricePayload);
             }
+
+            var debtErasureResult = await EraseNegativeStockDebtAsync(
+                items,
+                $"{DualStockInternalNotePrefix}: negative debt erasure before manual restock via {message.Channel}");
 
             var result = await _posDbService.CreateBulkPurchaseDocumentAsync(
                 bulkInputs,
@@ -3216,10 +3964,13 @@ namespace SmartSembakoAssistant.Services
                 return $"Bulk restock gagal: {result.Error}";
             }
 
+            var shadowConversionResults = await ApplyShadowConversionAsync(items, pricePayload, decision);
             await ApplyMasterPriceOverridesAsync(pricePayload, decision);
 
             var successMessage = new StringBuilder();
             successMessage.Append(BuildBulkRestockSuccessMessage(result.DocumentNumber, result.Items));
+            AppendDebtErasureSummary(successMessage, debtErasureResult);
+            AppendShadowConversionSummary(successMessage, shadowConversionResults);
             AppendPriceOverrideSummary(successMessage, pricePayload, decision);
             await AppendUnpromptedPurchaseCostNotesAsync(successMessage, items, pricePayload, decision);
             return successMessage.ToString();
@@ -3285,6 +4036,10 @@ namespace SmartSembakoAssistant.Services
                 return await QueuePriceOverrideConfirmationAsync(message, pending, pricePayload);
             }
 
+            var debtErasureResult = await EraseNegativeStockDebtAsync(
+                payload.Items,
+                $"{DualStockInternalNotePrefix}: negative debt erasure before OCR restock via {message.Channel}");
+
             var result = await _posDbService.CreateBulkPurchaseDocumentAsync(
                 bulkInputs,
                 1,
@@ -3303,6 +4058,7 @@ namespace SmartSembakoAssistant.Services
 
             var sb = new StringBuilder();
             sb.AppendLine(BuildBulkRestockSuccessMessage(result.DocumentNumber, result.Items));
+            AppendDebtErasureSummary(sb, debtErasureResult);
             AppendPriceOverrideSummary(sb, pricePayload, decision);
             await AppendUnpromptedPurchaseCostNotesAsync(sb, payload.Items, pricePayload, decision);
 
@@ -3765,6 +4521,73 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
+        private async Task<BulkDocumentResult?> EraseNegativeStockDebtAsync(
+            IEnumerable<BulkPendingItem> items,
+            string internalNote)
+        {
+            if (_posDbService == null)
+            {
+                return null;
+            }
+
+            var targets = new List<DualStockTarget>();
+            foreach (var item in items
+                         .Where(item => !string.IsNullOrWhiteSpace(item.ProductId))
+                         .GroupBy(item => item.ProductId, StringComparer.OrdinalIgnoreCase)
+                         .Select(group => group.Last()))
+            {
+                var product = await _posDbService.GetProductByIdAsync(item.ProductId);
+                if (product?.Stock.GetValueOrDefault() < 0)
+                {
+                    targets.Add(new DualStockTarget(product, 0));
+                }
+            }
+
+            if (!targets.Any())
+            {
+                return null;
+            }
+
+            return await CreateDualStockInventoryDocumentAsync(targets, internalNote);
+        }
+
+        private static void AppendDebtErasureSummary(StringBuilder sb, BulkDocumentResult? result)
+        {
+            if (result == null)
+            {
+                return;
+            }
+
+            sb.AppendLine();
+            if (!result.Success)
+            {
+                sb.AppendLine($"Debt erasure dilewati: {result.Error}");
+                return;
+            }
+
+            sb.AppendLine("Debt erasure:");
+            foreach (var item in result.Items.Take(10))
+            {
+                sb.AppendLine($"- {item.ProductName}: {FormatStockValue(item.OldStock)} -> 0 {GetUnitLabel(item.Unit)} sebelum restock");
+            }
+        }
+
+        private static void AppendShadowConversionSummary(StringBuilder sb, IEnumerable<ShadowConversionResult> results)
+        {
+            var list = results?.ToList() ?? new List<ShadowConversionResult>();
+            if (!list.Any())
+            {
+                return;
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Shadow conversion:");
+            foreach (ShadowConversionResult shadowResult in list)
+            {
+                sb.AppendLine($"- {FormatShadowConversionResult(shadowResult)}");
+            }
+        }
+
         private async Task AppendUnpromptedPurchaseCostNotesAsync(
             StringBuilder sb,
             IEnumerable<BulkPendingItem> items,
@@ -4163,6 +4986,311 @@ namespace SmartSembakoAssistant.Services
             sb.AppendLine();
             sb.Append("Ketik /set_family [nama unit besar] -> [nama unit kecil] @ [isi] untuk mapping.");
             return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleListFamilyAsync(string args = "")
+        {
+            var families = await GetDualStockFamiliesAsync(args);
+            if (!families.Any())
+            {
+                return string.IsNullOrWhiteSpace(args)
+                    ? "Belum ada mapping family/dual stock."
+                    : $"Mapping family untuk \"{args}\" tidak ditemukan.";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconPackage} LIST FAMILY / DUAL STOCK");
+            if (!string.IsNullOrWhiteSpace(args))
+            {
+                sb.AppendLine($"Filter: {args.Trim()}");
+            }
+
+            sb.AppendLine();
+            int index = 1;
+            foreach (var family in families.Take(20))
+            {
+                AppendDualStockFamilyDetail(sb, family, index);
+                index++;
+            }
+
+            if (families.Count > 20)
+            {
+                sb.AppendLine($"... {families.Count - 20} mapping lain tidak ditampilkan.");
+            }
+
+            sb.AppendLine();
+            sb.Append("Shadow parent = stok unit besar dikonversi ke unit kecil. Tidak mengubah stok Aronium.");
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleDualStockCommandAsync(string args)
+        {
+            return await HandleListFamilyAsync(args);
+        }
+
+        private async Task<string> HandleDualStockAlertCommandAsync()
+        {
+            var deficits = await GetDualStockDeficitFamiliesAsync();
+            if (!deficits.Any())
+            {
+                return $"{IconCheck} Tidak ada defisit dual stock saat ini.";
+            }
+
+            return BuildDualStockAlertMessage(deficits.Select(BuildDualStockDeficitLine).ToList());
+        }
+
+        private async Task<string> HandleDualStockSyncCommandAsync()
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            if (_configService.Config?.Automation?.EnableDualStockSync == false)
+            {
+                return "Dual stock sync nonaktif di Settings.";
+            }
+
+            var scan = await RunDualStockEquilibriumScanAsync(DateTime.Now, "manual bot command");
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconCheck} Konsolidasi dual stock selesai.");
+            sb.AppendLine($"Mapping dievaluasi: {scan.Processed}");
+            if (scan.Alerts.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine(BuildDualStockAlertMessage(scan.Alerts));
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private string HandleDualStockWatcherCommand(string args)
+        {
+            var automation = _configService.Config?.Automation;
+            if (automation == null)
+            {
+                return "Config automation belum tersedia.";
+            }
+
+            string mode = (args ?? string.Empty).Trim().ToLowerInvariant();
+            if (mode is "on" or "aktif" or "enable")
+            {
+                automation.EnableDualStockRealtimeWatcher = true;
+                _configService.SaveConfig();
+                return $"{IconCheck} Realtime watcher DualStock diaktifkan. Jika loop watcher belum berjalan, restart runtime/aplikasi agar timer dimulai.";
+            }
+
+            if (mode is "off" or "mati" or "disable")
+            {
+                automation.EnableDualStockRealtimeWatcher = false;
+                _configService.SaveConfig();
+                return $"{IconCheck} Realtime watcher DualStock dimatikan. Tick berikutnya tidak akan memproses watcher realtime.";
+            }
+
+            return "DualStock watcher:\n" +
+                   $"- Sync utama: {FormatEnabled(automation.EnableDualStockSync)}\n" +
+                   $"- Realtime watcher: {FormatEnabled(automation.EnableDualStockRealtimeWatcher)}\n" +
+                   $"- Interval: {GetDualStockSyncIntervalSeconds()} detik\n\n" +
+                   "Command: /dual_stock_watcher on atau /dual_stock_watcher off";
+        }
+
+        private string HandleDualStockChannelCommand(string args)
+        {
+            var automation = _configService.Config?.Automation;
+            if (automation == null)
+            {
+                return "Config automation belum tersedia.";
+            }
+
+            var tokens = (args ?? string.Empty)
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (tokens.Length >= 2 && TryParseOnOff(tokens[1], out bool enabled))
+            {
+                string channel = tokens[0].ToLowerInvariant();
+                if (channel is "telegram" or "tg")
+                {
+                    automation.EnableTelegramDualStockAlerts = enabled;
+                }
+                else if (channel is "cloud" or "wa_cloud" or "whatsapp_cloud" or "meta")
+                {
+                    automation.EnableWhatsAppCloudDualStockAlerts = enabled;
+                }
+                else if (channel is "baileys" or "local" or "wa_local")
+                {
+                    automation.EnableBaileysDualStockAlerts = enabled;
+                }
+                else
+                {
+                    return "Channel tidak dikenal. Gunakan: telegram, cloud, atau baileys.";
+                }
+
+                _configService.SaveConfig();
+                return $"{IconCheck} Channel alert DualStock {channel} diset {FormatEnabled(enabled)}.";
+            }
+
+            return "Channel alert DualStock:\n" +
+                   $"- Telegram: {FormatEnabled(automation.EnableTelegramDualStockAlerts)}\n" +
+                   $"- WhatsApp Cloud API: {FormatEnabled(automation.EnableWhatsAppCloudDualStockAlerts)}\n" +
+                   $"- WhatsApp Baileys: {FormatEnabled(automation.EnableBaileysDualStockAlerts)}\n\n" +
+                   "Command: /dual_stock_channel <telegram|cloud|baileys> <on|off>";
+        }
+
+        private async Task<List<ProductFamilyStock>> GetDualStockFamiliesAsync(string? query = null)
+        {
+            var result = new List<ProductFamilyStock>();
+            if (_posDbService == null)
+            {
+                return result;
+            }
+
+            string filter = (query ?? string.Empty).Trim();
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            foreach (var mapping in mappings.Where(mapping => mapping.ConversionRate > 0))
+            {
+                var parent = await _posDbService.GetProductByIdAsync(mapping.ParentProductId);
+                var child = await _posDbService.GetProductByIdAsync(mapping.ChildProductId);
+                if (parent == null || child == null)
+                {
+                    continue;
+                }
+
+                var family = new ProductFamilyStock
+                {
+                    Mapping = mapping,
+                    ParentProduct = parent,
+                    ChildProduct = child,
+                    ParentStock = parent.Stock ?? 0,
+                    ChildStock = child.Stock ?? 0,
+                    ConversionRate = mapping.ConversionRate
+                };
+
+                if (string.IsNullOrWhiteSpace(filter) || MatchesDualStockFamily(family, filter))
+                {
+                    result.Add(family);
+                }
+            }
+
+            return result
+                .OrderByDescending(IsDualStockFamilyDeficit)
+                .ThenBy(family => family.FamilyName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private async Task<List<ProductFamilyStock>> GetDualStockDeficitFamiliesAsync()
+        {
+            return (await GetDualStockFamiliesAsync())
+                .Where(IsDualStockFamilyDeficit)
+                .ToList();
+        }
+
+        private static bool MatchesDualStockFamily(ProductFamilyStock family, string query)
+        {
+            return (family.FamilyName?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
+                   (family.ParentProduct.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
+                   (family.ChildProduct.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
+                   (family.Mapping.ParentProductName?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) ||
+                   (family.Mapping.ChildProductName?.Contains(query, StringComparison.OrdinalIgnoreCase) == true);
+        }
+
+        private static bool IsDualStockFamilyDeficit(ProductFamilyStock family)
+        {
+            return family.ParentStock < 0 || family.TotalChildStock <= 0;
+        }
+
+        private string BuildDualStockDeficitLine(ProductFamilyStock family)
+        {
+            return $"{FormatOptional(family.FamilyName)}: " +
+                   $"{FormatOptional(family.ParentProduct.Name)} {FormatStockValue(family.ParentStock)} {GetUnitLabel(family.ParentProduct.Unit)}, " +
+                   $"{FormatOptional(family.ChildProduct.Name)} {FormatStockValue(family.ChildStock)} {GetUnitLabel(family.ChildProduct.Unit)}, " +
+                   $"total {FormatStockValue(family.TotalChildStock)} {GetUnitLabel(family.ChildProduct.Unit)}.";
+        }
+
+        private string BuildDualStockAlertMessage(IReadOnlyCollection<string> alerts)
+        {
+            if (!alerts.Any())
+            {
+                return $"{IconCheck} Tidak ada defisit dual stock.";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconWarning} DEFISIT DUAL STOCK");
+            sb.AppendLine();
+            foreach (var alert in alerts.Take(10))
+            {
+                sb.AppendLine($"- {alert}");
+            }
+
+            if (alerts.Count > 10)
+            {
+                sb.AppendLine($"... {alerts.Count - 10} alert lain tidak ditampilkan.");
+            }
+
+            sb.AppendLine();
+            sb.Append("Input restock atau lakukan /inventory_family untuk koreksi stok fisik keluarga.");
+            return sb.ToString().TrimEnd();
+        }
+
+        private string BuildDualStockFamilyCompactLine(ProductFamilyStock family)
+        {
+            return $"{FormatOptional(family.FamilyName)} | " +
+                   $"{FormatStockValue(family.ParentStock)} {GetUnitLabel(family.ParentProduct.Unit)} + " +
+                   $"{FormatStockValue(family.ChildStock)} {GetUnitLabel(family.ChildProduct.Unit)} | " +
+                   $"total {FormatStockValue(family.TotalChildStock)} {GetUnitLabel(family.ChildProduct.Unit)}";
+        }
+
+        private void AppendDualStockFamilyDetail(StringBuilder sb, ProductFamilyStock family, int index)
+        {
+            decimal parentShadow = family.ParentStock * family.ConversionRate;
+            sb.AppendLine($"{index}. {FormatOptional(family.FamilyName)}");
+            sb.AppendLine($"   Parent: {FormatOptional(family.ParentProduct.Name)} = {FormatStockValue(family.ParentStock)} {GetUnitLabel(family.ParentProduct.Unit)} (shadow {FormatStockValue(parentShadow)} {GetUnitLabel(family.ChildProduct.Unit)})");
+            sb.AppendLine($"   Child : {FormatOptional(family.ChildProduct.Name)} = {FormatStockValue(family.ChildStock)} {GetUnitLabel(family.ChildProduct.Unit)}");
+            sb.AppendLine($"   Rasio : 1 {GetUnitLabel(family.ParentProduct.Unit)} = {FormatStockValue(family.ConversionRate)} {GetUnitLabel(family.ChildProduct.Unit)}");
+            sb.AppendLine($"   Total : {FormatStockValue(family.TotalChildStock)} {GetUnitLabel(family.ChildProduct.Unit)} ({FormatStockValue(family.TotalParentStock)} {GetUnitLabel(family.ParentProduct.Unit)})");
+            sb.AppendLine($"   Status: {BuildDualStockFamilyStatus(family)}");
+        }
+
+        private string BuildDualStockFamilyStatus(ProductFamilyStock family)
+        {
+            if (IsDualStockFamilyDeficit(family))
+            {
+                return $"{IconWarning} defisit";
+            }
+
+            if (family.ChildStock >= family.ConversionRate)
+            {
+                return "perlu auto-pack";
+            }
+
+            if (family.ChildStock <= -family.ConversionRate && family.ParentStock > 0)
+            {
+                return "perlu auto-break";
+            }
+
+            return $"{IconCheck} seimbang";
+        }
+
+        private static bool TryParseOnOff(string value, out bool enabled)
+        {
+            string normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+            if (normalized is "on" or "aktif" or "enable" or "enabled" or "true" or "1")
+            {
+                enabled = true;
+                return true;
+            }
+
+            if (normalized is "off" or "mati" or "disable" or "disabled" or "false" or "0")
+            {
+                enabled = false;
+                return true;
+            }
+
+            enabled = false;
+            return false;
+        }
+
+        private static string FormatEnabled(bool value)
+        {
+            return value ? "aktif" : "nonaktif";
         }
 
         private async Task<string> HandleEffectiveStockAsync(string args)
@@ -5507,6 +6635,7 @@ namespace SmartSembakoAssistant.Services
                        "Pilih kategori bantuan di bawah, atau ketik:\n" +
                        "- /help lengkap\n" +
                        "- /help stok\n" +
+                       "- /help dual_stock\n" +
                        "- /help ocr\n" +
                        "- /help pelanggan\n" +
                        "- /help dokumen";
@@ -5537,6 +6666,10 @@ namespace SmartSembakoAssistant.Services
                     isOwner
                         ? "Shadow stock:\n/shadow_stok\n/stok_efektif <produk>\n/set_family <besar> -> <kecil> @ <isi>"
                         : "Shadow stock hanya tersedia untuk owner.",
+                "dual_stock" or "dualstok" =>
+                    isOwner
+                        ? "Dual stock:\n/list_family - lihat mapping parent/child dan shadow stock\n/dual_stock [produk] - ringkasan keluarga\n/dual_stock_alert - cek defisit tanpa kirim WA\n/dual_stock_sync - konsolidasi manual\n/dual_stock_watcher status|on|off\n/dual_stock_channel [telegram|cloud|baileys] [on|off]"
+                        : "Dual stock hanya tersedia untuk owner.",
                 "export" =>
                     isOwner
                         ? "Export data:\n/ekspor_lengkap\nEKSPOR penjualan <periode>"
@@ -5606,6 +6739,12 @@ namespace SmartSembakoAssistant.Services
                 sb.AppendLine("/sleeping_stock - kategori wajib yang jarang laku");
                 sb.AppendLine("/shadow_stok - unit besar belum dimapping");
                 sb.AppendLine("/stok_efektif <produk> - hitung stok shadow keluarga");
+                sb.AppendLine("/list_family - list mapping family parent/child");
+                sb.AppendLine("/dual_stock [produk] - ringkasan dual stock");
+                sb.AppendLine("/dual_stock_alert - cek defisit dual stock");
+                sb.AppendLine("/dual_stock_sync - konsolidasi dual stock manual");
+                sb.AppendLine("/dual_stock_watcher status|on|off - atur watcher realtime");
+                sb.AppendLine("/dual_stock_channel [telegram|cloud|baileys] [on|off] - atur channel alert");
                 sb.AppendLine("/set_family <besar> -> <kecil> @ <isi> - mapping unit");
                 sb.AppendLine("/cek_expired - produk dengan data expired");
                 sb.AppendLine("/stok_kategori <nama> - stok per kategori");
@@ -8759,10 +9898,7 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 using JsonDocument document = JsonDocument.Parse(sanitized);
-                string resolvedVendorType = string.Equals(vendorType, "GENERIC", StringComparison.OrdinalIgnoreCase) &&
-                                            ContainsAny(sanitized, "WINGS", "SAYAP MAS", "SAYAP ANAS", "SMU")
-                    ? "WINGS_SURAT_JALAN"
-                    : vendorType;
+                string resolvedVendorType = ResolveReceiptVendorFromParsedJson(vendorType, sanitized);
                 ParsedReceipt receipt = ParseReceiptDocument(document.RootElement, resolvedVendorType);
                 return receipt.Items?.Any() == true ? receipt : null;
             }
@@ -8812,13 +9948,21 @@ namespace SmartSembakoAssistant.Services
                 {
                     string? rawProductName = item.TryGetProperty("product_name", out var productProp) ? productProp.GetString() : null;
                     decimal? qtyBox = item.TryGetProperty("qty_box", out var qtyBoxProp) ? ReadJsonDecimal(qtyBoxProp) : null;
-                    int? isiPerBox = item.TryGetProperty("isi_per_box", out var isiPerBoxProp) && isiPerBoxProp.TryGetInt32(out var isiValue) ? isiValue : null;
+                    int? isiPerBox = item.TryGetProperty("isi_per_box", out var isiPerBoxProp) ? ReadJsonInt32(isiPerBoxProp) : null;
                     string? rawQuantity = item.TryGetProperty("quantity", out var qtyProp) ? qtyProp.ToString() : null;
                     decimal? quantity = item.TryGetProperty("quantity", out var parsedQtyProp) ? ReadJsonDecimal(parsedQtyProp) : null;
                     string? unit = item.TryGetProperty("unit", out var unitProp) ? unitProp.GetString() : null;
                     decimal? unitPrice = item.TryGetProperty("unit_price", out var priceProp) ? ReadJsonDecimal(priceProp) : null;
                     decimal? lineTotal = item.TryGetProperty("total", out var lineProp) ? ReadJsonDecimal(lineProp) : null;
                     (quantity, unit) = NormalizeReceiptQuantityAndUnit(quantity, unit, rawQuantity);
+                    (quantity, unit, unitPrice, lineTotal, qtyBox, isiPerBox) = ApplyReceiptPostParseGuards(
+                        vendorType,
+                        quantity,
+                        unit,
+                        unitPrice,
+                        lineTotal,
+                        qtyBox,
+                        isiPerBox);
 
                     receipt.Items.Add(new ReceiptItem
                     {
@@ -8836,6 +9980,77 @@ namespace SmartSembakoAssistant.Services
             return receipt;
         }
 
+        private static string ResolveReceiptVendorFromParsedJson(string detectedVendorType, string sanitizedJson)
+        {
+            if (ContainsAny(sanitizedJson, "FASTRATA", "PT. FASTRATA BUANA", "Jumlah Setelah Potongan", "Harga Incl"))
+            {
+                return "FASTRATA_FAKTUR";
+            }
+
+            if (ContainsAny(sanitizedJson, "ARTABOGA", "ARINDO MAKMUR", "PT. ARTABOGA CEMERLANG", "JML NETTO"))
+            {
+                return "ARTABOGA_FAKTUR";
+            }
+
+            if ((string.Equals(detectedVendorType, "GENERIC", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(detectedVendorType, "WINGS_SURAT_JALAN", StringComparison.OrdinalIgnoreCase)) &&
+                ContainsAny(sanitizedJson, "WINGS", "SAYAP MAS", "SAYAP ANAS", "SMU"))
+            {
+                return "WINGS_SURAT_JALAN";
+            }
+
+            return detectedVendorType;
+        }
+
+        private static (decimal? Quantity, string? Unit, decimal? UnitPrice, decimal? Total, decimal? QtyBox, int? IsiPerBox)
+            ApplyReceiptPostParseGuards(
+                string vendorType,
+                decimal? quantity,
+                string? unit,
+                decimal? unitPrice,
+                decimal? total,
+                decimal? qtyBox,
+                int? isiPerBox)
+        {
+            bool hasQuantity = quantity.GetValueOrDefault() > 0;
+            bool hasTotal = total.GetValueOrDefault() > 0;
+            string normalizedVendor = vendorType.Trim().ToUpperInvariant();
+
+            if (normalizedVendor == "FASTRATA_FAKTUR")
+            {
+                // FASTRATA has no explicit isi-per-box column; values here are usually prices misread as packaging.
+                isiPerBox = null;
+                if (qtyBox.GetValueOrDefault() <= 0 && hasQuantity)
+                {
+                    qtyBox = quantity;
+                }
+            }
+
+            if (normalizedVendor == "ARTABOGA_FAKTUR" &&
+                string.IsNullOrWhiteSpace(unit) &&
+                hasQuantity)
+            {
+                unit = "Pak";
+            }
+
+            if ((normalizedVendor == "FASTRATA_FAKTUR" || normalizedVendor == "ARTABOGA_FAKTUR") &&
+                hasTotal &&
+                hasQuantity)
+            {
+                unitPrice = decimal.Round(total!.Value / quantity!.Value, 4);
+            }
+            else if (unitPrice.GetValueOrDefault() <= 0 && hasTotal && hasQuantity)
+            {
+                unitPrice = decimal.Round(total!.Value / quantity!.Value, 4);
+            }
+            else if (!hasTotal && unitPrice.GetValueOrDefault() > 0 && hasQuantity)
+            {
+                total = decimal.Round(unitPrice!.Value * quantity!.Value, 4);
+            }
+
+            return (quantity, unit, unitPrice, total, qtyBox, isiPerBox);
+        }
+
         private static decimal? ReadJsonDecimal(JsonElement element)
         {
             if (element.ValueKind == JsonValueKind.Number && element.TryGetDecimal(out var numericValue))
@@ -8847,6 +10062,31 @@ namespace SmartSembakoAssistant.Services
             {
                 decimal parsed = ParseLooseDecimal(element.GetString() ?? string.Empty);
                 return parsed == 0 ? null : parsed;
+            }
+
+            return null;
+        }
+
+        private static int? ReadJsonInt32(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var numericValue))
+            {
+                return numericValue;
+            }
+
+            if (element.ValueKind == JsonValueKind.String &&
+                int.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var stringValue))
+            {
+                return stringValue;
+            }
+
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                decimal looseValue = ParseLooseDecimal(element.GetString() ?? string.Empty);
+                if (looseValue > 0 && looseValue <= int.MaxValue)
+                {
+                    return (int)Math.Round(looseValue);
+                }
             }
 
             return null;
@@ -8885,7 +10125,10 @@ namespace SmartSembakoAssistant.Services
                 string name = match.Groups["name"].Value.Trim();
                 decimal qty = ParseLooseDecimal(match.Groups["qty"].Value);
                 decimal price = ParseLooseDecimal(match.Groups["price"].Value);
-                if (string.IsNullOrWhiteSpace(name) || qty <= 0 || price <= 0)
+                if (string.IsNullOrWhiteSpace(name) ||
+                    IsNonProductReceiptLine(name, vendorType) ||
+                    qty <= 0 ||
+                    price <= 0)
                 {
                     continue;
                 }
@@ -9113,10 +10356,38 @@ namespace SmartSembakoAssistant.Services
 
         private static string DetectReceiptVendor(string ocrText)
         {
-            if (ocrText.Contains("WINGS", StringComparison.OrdinalIgnoreCase) ||
+            if (ocrText.Contains("FASTRATA", StringComparison.OrdinalIgnoreCase) ||
+                ocrText.Contains("FAKTUR PENJUALAN", StringComparison.OrdinalIgnoreCase) ||
+                ocrText.Contains("RTG,", StringComparison.OrdinalIgnoreCase) ||
+                ocrText.Contains("Jumlah Setelah", StringComparison.OrdinalIgnoreCase) ||
+                ocrText.Contains("Potongan Tambahan", StringComparison.OrdinalIgnoreCase) ||
+                ocrText.Contains("Harga Incl", StringComparison.OrdinalIgnoreCase))
+            {
+                return "FASTRATA_FAKTUR";
+            }
+
+            if (ocrText.Contains("ARTABOGA", StringComparison.OrdinalIgnoreCase) ||
+                ocrText.Contains("ARINDO MAKMUR", StringComparison.OrdinalIgnoreCase) ||
+                (ocrText.Contains("BSR", StringComparison.OrdinalIgnoreCase) &&
+                 ocrText.Contains("TGH", StringComparison.OrdinalIgnoreCase) &&
+                 ocrText.Contains("KCL", StringComparison.OrdinalIgnoreCase) &&
+                 (ocrText.Contains("JML NETTO", StringComparison.OrdinalIgnoreCase) ||
+                  ocrText.Contains("JML HETTO", StringComparison.OrdinalIgnoreCase) ||
+                  ocrText.Contains("HARGA(RP)", StringComparison.OrdinalIgnoreCase))) ||
+                (ocrText.Contains("FAKTUR TUNAI", StringComparison.OrdinalIgnoreCase) &&
+                 (ocrText.Contains("TGL FAKTUR", StringComparison.OrdinalIgnoreCase) ||
+                  ocrText.Contains("JML NETTO", StringComparison.OrdinalIgnoreCase) ||
+                  ocrText.Contains("JML. NETTO", StringComparison.OrdinalIgnoreCase))))
+            {
+                return "ARTABOGA_FAKTUR";
+            }
+
+            bool hasWingsIdentity =
+                ocrText.Contains("WINGS", StringComparison.OrdinalIgnoreCase) ||
                 ocrText.Contains("SAYAP MAS", StringComparison.OrdinalIgnoreCase) ||
-                ocrText.Contains("SURAT JALAN", StringComparison.OrdinalIgnoreCase) ||
-                Regex.IsMatch(ocrText, @"\bJBM\d{6,}\b", RegexOptions.IgnoreCase) ||
+                ocrText.Contains("SAYAP ANAS", StringComparison.OrdinalIgnoreCase) ||
+                Regex.IsMatch(ocrText, @"\bJBM\d{6,}\b", RegexOptions.IgnoreCase);
+            bool hasWingsColumns =
                 ocrText.Contains("JMLH.BERSIH", StringComparison.OrdinalIgnoreCase) ||
                 ocrText.Contains("JMLH BERSIH", StringComparison.OrdinalIgnoreCase) ||
                 ocrText.Contains("JML.BERSIH", StringComparison.OrdinalIgnoreCase) ||
@@ -9137,26 +10408,11 @@ namespace SmartSembakoAssistant.Services
                  (ocrText.Contains("NO.ORDER", StringComparison.OrdinalIgnoreCase) ||
                   ocrText.Contains("NO ORDER", StringComparison.OrdinalIgnoreCase))) ||
                 (ocrText.Contains("PROD.DISC", StringComparison.OrdinalIgnoreCase) && ocrText.Contains("PEMBELI", StringComparison.OrdinalIgnoreCase)) ||
-                (ocrText.Contains("PROD DISC", StringComparison.OrdinalIgnoreCase) && ocrText.Contains("PEMBELI", StringComparison.OrdinalIgnoreCase)))
+                (ocrText.Contains("PROD DISC", StringComparison.OrdinalIgnoreCase) && ocrText.Contains("PEMBELI", StringComparison.OrdinalIgnoreCase));
+
+            if (hasWingsIdentity || (ocrText.Contains("SURAT JALAN", StringComparison.OrdinalIgnoreCase) && hasWingsColumns))
             {
                 return "WINGS_SURAT_JALAN";
-            }
-
-            if (ocrText.Contains("FASTRATA", StringComparison.OrdinalIgnoreCase) ||
-                ocrText.Contains("FAKTUR PENJUALAN", StringComparison.OrdinalIgnoreCase) ||
-                ocrText.Contains("RTG,", StringComparison.OrdinalIgnoreCase))
-            {
-                return "FASTRATA_FAKTUR";
-            }
-
-            if (ocrText.Contains("ARTABOGA", StringComparison.OrdinalIgnoreCase) ||
-                ocrText.Contains("ARINDO MAKMUR", StringComparison.OrdinalIgnoreCase) ||
-                (ocrText.Contains("FAKTUR TUNAI", StringComparison.OrdinalIgnoreCase) &&
-                 (ocrText.Contains("TGL FAKTUR", StringComparison.OrdinalIgnoreCase) ||
-                  ocrText.Contains("JML NETTO", StringComparison.OrdinalIgnoreCase) ||
-                  ocrText.Contains("JML. NETTO", StringComparison.OrdinalIgnoreCase))))
-            {
-                return "ARTABOGA_FAKTUR";
             }
 
             if (ocrText.Contains("TANI MAKMUR", StringComparison.OrdinalIgnoreCase) ||
@@ -9433,6 +10689,53 @@ namespace SmartSembakoAssistant.Services
             });
         }
 
+        private static bool IsNonProductReceiptLine(string name, string? vendorType)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            string normalized = NormalizeText(name);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return true;
+            }
+
+            if (Regex.IsMatch(normalized, @"\b(jl|jalan|alamat|ship to|tanggal|tgl|faktur|nomor|halaman|npwp|operator|wiraniaga|duta arta|purwakarta|jakarta|cengkareng|citamiang|palumbon)\b", RegexOptions.IgnoreCase))
+            {
+                return true;
+            }
+
+            if (Regex.IsMatch(normalized, @"\b\d{1,2}\s+(jan|feb|mar|apr|may|mei|jun|jul|aug|agu|sep|oct|okt|nov|dec|des)\s+\d{4}\b", RegexOptions.IgnoreCase))
+            {
+                return true;
+            }
+
+            string normalizedVendor = vendorType?.Trim().ToUpperInvariant() ?? string.Empty;
+            if (normalizedVendor == "ARTABOGA_FAKTUR")
+            {
+                bool looksLikeArtabogaProduct =
+                    Regex.IsMatch(normalized, @"\bbaterai\b", RegexOptions.IgnoreCase) ||
+                    Regex.IsMatch(normalized, @"^\$?\d{2,5}\s+[a-z0-9]", RegexOptions.IgnoreCase);
+
+                return !looksLikeArtabogaProduct &&
+                       Regex.IsMatch(normalized, @"\b(rp|may|mei|pwk|manits|bayar|ditempat)\b", RegexOptions.IgnoreCase);
+            }
+
+            if (normalizedVendor == "FASTRATA_FAKTUR")
+            {
+                bool looksLikeFastrataProduct =
+                    Regex.IsMatch(normalized, @"\b(rtg|sp mix|mocacinno|abc susu|ka one)\b", RegexOptions.IgnoreCase) ||
+                    Regex.IsMatch(normalized, @"^[a-z0-9]{2,}\.[a-z0-9]{2,}\.[a-z0-9]{4,}\s+", RegexOptions.IgnoreCase);
+
+                return !looksLikeFastrataProduct &&
+                       Regex.IsMatch(normalized, @"\b(no kartu|surat pesanan|jatuh tempo|perhatian|transfer|dpp|ppn|terbilang)\b", RegexOptions.IgnoreCase);
+            }
+
+            return false;
+        }
+
         private static string? GetReceiptSupplierName(ParsedReceipt receipt)
         {
             return string.IsNullOrWhiteSpace(receipt.SupplierName)
@@ -9467,7 +10770,10 @@ namespace SmartSembakoAssistant.Services
                     rawName = originalRawName;
                 }
 
-                if (IsFooterItem(originalRawName) || IsFooterItem(rawName))
+                if (IsFooterItem(originalRawName) ||
+                    IsFooterItem(rawName) ||
+                    IsNonProductReceiptLine(originalRawName, receipt.VendorType) ||
+                    IsNonProductReceiptLine(rawName, receipt.VendorType))
                 {
                     continue;
                 }
@@ -10674,12 +11980,32 @@ namespace SmartSembakoAssistant.Services
             return sb.ToString();
         }
 
-        private string BuildCriticalStockResponse(IEnumerable<Product> products)
+        private string BuildCriticalStockResponse(
+            IEnumerable<Product> products,
+            IReadOnlyCollection<ProductFamilyStock>? dualStockDeficits = null)
         {
             var sb = new StringBuilder();
             sb.AppendLine($"{IconSiren} STOK KRITIS");
             sb.AppendLine();
-            AppendStockAttentionLines(sb, products, maxPerGroup: 10);
+            var productList = products.ToList();
+            if (productList.Any())
+            {
+                AppendStockAttentionLines(sb, productList, maxPerGroup: 10);
+            }
+            else
+            {
+                sb.AppendLine("  Tidak ada stok produk reguler yang kritis.");
+            }
+
+            if (dualStockDeficits?.Any() == true)
+            {
+                sb.AppendLine();
+                sb.AppendLine("  DEFISIT DUAL STOK:");
+                foreach (var family in dualStockDeficits.Take(10))
+                {
+                    sb.AppendLine($"    {IconWarning} {BuildDualStockFamilyCompactLine(family)}");
+                }
+            }
 
             sb.AppendLine();
             sb.Append("Gunakan /restock atau /inventory untuk memperbarui.");
@@ -11755,7 +13081,62 @@ namespace SmartSembakoAssistant.Services
             var revenue = await _posDbService.GetTodayRevenueAsync();
             var profit = await _posDbService.GetTodayProfitAsync();
             var lowStock = await _posDbService.GetLowStockProductsAsync(10);
-            return $"Daily summary {DateTime.Now:dd/MM/yyyy}\nOmzet: {FormatCurrency(revenue)}\nProfit: {FormatCurrency(profit)}\nStok rendah: {lowStock.Count} produk";
+            var lowStockLines = await BuildDualThresholdLowStockLinesAsync(lowStock.Take(10).ToList());
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Daily summary {DateTime.Now:dd/MM/yyyy}");
+            sb.AppendLine($"Omzet: {FormatCurrency(revenue)}");
+            sb.AppendLine($"Profit: {FormatCurrency(profit)}");
+            sb.AppendLine($"Stok rendah: {lowStock.Count} produk");
+            if (lowStockLines.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Alert stok:");
+                foreach (string line in lowStockLines)
+                {
+                    sb.AppendLine(line);
+                }
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<List<string>> BuildDualThresholdLowStockLinesAsync(List<Product> lowStock)
+        {
+            var lines = new List<string>();
+            if (_posDbService == null || !lowStock.Any())
+            {
+                return lines;
+            }
+
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            var productsById = (await _posDbService.GetAllProductsAsync())
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .GroupBy(product => product.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var product in lowStock)
+            {
+                var childMapping = mappings.FirstOrDefault(mapping =>
+                    string.Equals(mapping.ChildProductId, product.Id, StringComparison.OrdinalIgnoreCase) &&
+                    mapping.ConversionRate > 0);
+                if (childMapping != null &&
+                    productsById.TryGetValue(childMapping.ParentProductId, out var parent))
+                {
+                    decimal childStock = product.Stock ?? 0;
+                    decimal parentStock = parent.Stock ?? 0;
+                    decimal effectiveChild = parentStock * childMapping.ConversionRate + childStock;
+                    if (effectiveChild > 10)
+                    {
+                        lines.Add($"- {FormatOptional(product.Name)}: {FormatStockValue(childStock)} {GetUnitLabel(product.Unit)} -> cukup repack/konversi dari {FormatOptional(parent.Name)} (efektif {FormatStockValue(effectiveChild)} {GetUnitLabel(product.Unit)})");
+                        continue;
+                    }
+                }
+
+                lines.Add($"- {FormatOptional(product.Name)}: {FormatStockValue(product.Stock ?? 0)} {GetUnitLabel(product.Unit)} -> segera cek/restock");
+            }
+
+            return lines;
         }
 
         private async Task<string?> BuildReceivableAlertAsync()
@@ -11938,6 +13319,74 @@ namespace SmartSembakoAssistant.Services
                     UserRole = "System",
                     Status = "queued",
                     Details = $"Low stock alert queued to {outputs.Count} recipient(s)."
+                });
+            }
+
+            return outputs;
+        }
+
+        private List<OutboundMessage> BuildDualStockAlertBroadcasts(string text, string triggerType)
+        {
+            var outputs = new List<OutboundMessage>();
+            string correlationId = Guid.NewGuid().ToString("N");
+            var automation = _configService.Config?.Automation;
+
+            if (automation?.EnableTelegramDualStockAlerts != false)
+            {
+                var telegramOwners = _configService.Config?.Telegram?.OwnerChatIds ?? new List<long>();
+                foreach (var ownerId in telegramOwners)
+                {
+                    outputs.Add(new OutboundMessage
+                    {
+                        Channel = ChannelType.Telegram,
+                        RecipientId = ownerId.ToString(CultureInfo.InvariantCulture),
+                        Text = text,
+                        CorrelationId = correlationId,
+                        OutboundSourceType = "scheduled_alert"
+                    });
+                }
+            }
+
+            if (automation?.EnableWhatsAppCloudDualStockAlerts == true && IsWhatsAppCloudOutboundConfigured())
+            {
+                var waOwners = _configService.Config?.WhatsApp?.OwnerNumbers ?? new List<string>();
+                foreach (var number in waOwners)
+                {
+                    var templateOutbound = CreateWhatsAppTemplateOutbound(number, text, correlationId, triggerType);
+                    if (templateOutbound != null)
+                    {
+                        outputs.Add(templateOutbound);
+                    }
+                }
+            }
+
+            if (automation?.EnableBaileysDualStockAlerts != false && IsBaileysTransportConfigured())
+            {
+                var baileysOwners = _configService.Config?.Baileys?.OwnerNumbers ?? new List<string>();
+                foreach (var number in baileysOwners)
+                {
+                    outputs.Add(new OutboundMessage
+                    {
+                        Channel = ChannelType.Baileys,
+                        RecipientId = NormalizeWhatsAppNumber(number),
+                        Text = text,
+                        CorrelationId = correlationId,
+                        OutboundSourceType = "scheduled_alert"
+                    });
+                }
+            }
+
+            if (outputs.Any())
+            {
+                _ = _databaseService.AddAutomationExecutionAsync(new AutomationExecutionRecord
+                {
+                    CorrelationId = correlationId,
+                    TriggerType = triggerType,
+                    Channel = ChannelType.System.ToString(),
+                    SenderId = "system",
+                    UserRole = "System",
+                    Status = "queued",
+                    Details = $"Dual stock alert queued to {outputs.Count} recipient(s)."
                 });
             }
 

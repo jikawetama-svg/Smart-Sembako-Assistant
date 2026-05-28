@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -25,8 +26,7 @@ namespace SmartSembakoAssistant.Services
         {
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3.1-flash"
+            "gemini-3.1-flash-lite"
         };
         private bool _disposed = false;
 
@@ -39,10 +39,10 @@ namespace SmartSembakoAssistant.Services
 
             var config = configService.Config;
             _apiKey = config?.Groq?.ApiKey ?? "";
-            _model = config?.Groq?.Model ?? "llama-3.1-8b-instant";
+            _model = config?.Groq?.Model ?? "llama-3.3-70b-versatile";
             _fallbackApiKey = config?.Groq?.FallbackApiKey;
-            _fallbackModel = config?.Groq?.FallbackModel ?? "gemini-3.1-flash-lite";
-            _visionModel = config?.Groq?.VisionModel ?? "gemini-3.1-flash-lite";
+            _fallbackModel = config?.Groq?.FallbackModel ?? "gemini-2.5-flash";
+            _visionModel = config?.Groq?.VisionModel ?? "gemini-2.5-flash";
         }
 
         public bool HasGeminiFallbackConfigured =>
@@ -423,10 +423,12 @@ namespace SmartSembakoAssistant.Services
             prompt.AppendLine("8. Format baris bisa bervariasi: [nama][harga][qty][unit][total], [nama][qty][unit][total], atau tabel multi-kolom.");
             prompt.AppendLine("9. Jika quantity ditulis menyatu dengan satuan tanpa spasi seperti '10Box', '5PCS', '2Bks', pisahkan menjadi quantity angka dan unit string.");
             prompt.AppendLine("10. Jika quantity tidak ada, gunakan 1.");
-            prompt.AppendLine("11. Jika ada kolom total netto per baris seperti 'Jumlah Setelah Potongan', 'JMLH.BERSIH', atau total bersih lain, gunakan itu sebagai total utama.");
-            prompt.AppendLine("12. Jika total netto per baris tersedia, unit_price WAJIB dihitung dari total netto / quantity. Jangan pakai kolom Harga asli karena belum dipotong diskon/pajak.");
-            prompt.AppendLine("13. unit adalah satuan seperti pcs, pak, dus, rol, bal, kg, ltr, kmpn, box, bks. Jika tidak ada, gunakan null.");
-            prompt.AppendLine("14. Jika nilai tidak ditemukan, gunakan null atau string kosong sesuai tipe field.");
+            prompt.AppendLine("11. Jika ada kolom total netto per baris seperti 'Jumlah Setelah Potongan', 'JMLH.BERSIH', 'JML NETTO', atau total bersih lain, gunakan itu sebagai total utama.");
+            prompt.AppendLine("12. Untuk kebutuhan stok/cost, unit_price harus mewakili harga netto per quantity invoice. Jika total netto dan quantity valid, hitung unit_price = total netto / quantity.");
+            prompt.AppendLine("13. Kolom harga bruto seperti HARGA(RP), Harga Incl. PPN, atau Harga asli hanya boleh dipakai sebagai fallback jika total netto tidak terbaca.");
+            prompt.AppendLine("14. unit adalah satuan seperti pcs, pak, dus, rol, bal, kg, ltr, kmpn, box, bks. Jika tidak ada, gunakan null.");
+            prompt.AppendLine("15. isi_per_box hanya diisi jika ada kolom jumlah isi kemasan yang eksplisit. Jangan isi isi_per_box dengan harga barang.");
+            prompt.AppendLine("16. Jika nilai tidak ditemukan, gunakan null atau string kosong sesuai tipe field.");
             prompt.AppendLine();
             prompt.AppendLine("Schema wajib:");
             prompt.Append(@"{""supplier_name"":"""",""buyer_name"":"""",""store_name"":"""",""date"":"""",""receipt_number"":"""",""items"":[{""product_name"":"""",""qty_box"":1,""isi_per_box"":null,""quantity"":1,""unit"":null,""unit_price"":0,""total"":0}],""total"":0}");
@@ -468,7 +470,11 @@ namespace SmartSembakoAssistant.Services
                     "'2 00J... MOCACINNO (RTG...) 5Box 170,000 8,500 0 15,147 826,353' → product_name='MOCACINNO', quantity=5, unit='Box', total=826353. " +
                     "'3 00J... ABC SUSU (RTG...) 2Box 200,000 6,680 0 7,079 386,241' → product_name='ABC SUSU', quantity=2, unit='Box', total=386241. " +
                     "'4 00J... KA ONE GL PISAH (RTG...) 10Bks 1,355 0 0 0 13,550' → product_name='KA ONE GL PISAH', quantity=10, unit='Bks', total=13550. " +
-                    "total per baris = kolom TERAKHIR 'Jumlah Setelah Potongan'. Jika ada harga satuan eksplisit, pakai itu sebagai unit_price. Jika tidak ada, unit_price = total dibagi quantity.",
+                    "total per baris = kolom TERAKHIR 'Jumlah Setelah Potongan'. Jika ada harga satuan eksplisit, pakai itu sebagai unit_price. Jika tidak ada, unit_price = total dibagi quantity. " +
+                    "PENTING TAMBAHAN FASTRATA: abaikan contoh lama jika bertentangan. FASTRATA tidak punya kolom isi per box, jadi isi_per_box selalu null. " +
+                    "Angka setelah quantity adalah harga, bukan isi kemasan. Untuk stok/cost, unit_price = total Jumlah Setelah Potongan / quantity. " +
+                    "Contoh benar: SP MIX 10Box total 1,964,000 -> quantity=10, unit='Box', total=1964000, unit_price=196400, isi_per_box=null. " +
+                    "GD MOCACINNO 5Box total 826,353 -> quantity=5, unit='Box', total=826353, unit_price=165270.6, isi_per_box=null.",
                 "ARTABOGA_FAKTUR" =>
                     "Hint vendor ARTABOGA_FAKTUR: Ini adalah Faktur Tunai PT. Artaboga Cemerlang / Arindo Makmur. " +
                     "supplier_name = 'PT. ARTABOGA CEMERLANG'. " +
@@ -476,7 +482,7 @@ namespace SmartSembakoAssistant.Services
                     "Format tabel: KODE | NAMA BARANG | BSR | TGH | KCL | HARGA(RP) | BRUTO | DISC1 | DISC2 | JML NETTO. " +
                     "Quantity dipilih dari kolom yang bernilai > 0 dengan prioritas TGH, lalu BSR, lalu KCL. " +
                     "Jika quantity dari TGH gunakan unit='Pak'; jika dari BSR gunakan unit='Dus'; jika dari KCL gunakan unit='Pcs'. " +
-                    "total per baris = JML NETTO setelah diskon. Jika kolom HARGA(RP) terbaca, gunakan itu sebagai unit_price. Jika tidak, unit_price = total dibagi quantity. " +
+                    "total per baris = JML NETTO setelah diskon. unit_price = JML NETTO / quantity jika total dan quantity valid. Gunakan kolom HARGA(RP) hanya sebagai fallback jika JML NETTO rusak atau tidak terbaca. " +
                     "Hapus kode produk numerik di awal nama barang dan pertahankan nama barang utama saja.",
                 "TANI_MAKMUR_POS" =>
                     "Hint vendor TANI_MAKMUR_POS: baris pertama adalah supplier_name. Tanggal sering berbentuk 'Wed,06-May-2026,17:27:17'. Baris 'Kasbon' bukan produk dan harus diabaikan. Jika kolom Harga tersedia, pakai langsung sebagai unit_price. Jika qty = 1 dan harga satuan kosong, gunakan total sebagai unit_price.",
@@ -881,6 +887,93 @@ Jika produk tidak punya data expired, jawab ""tidak ada data expired untuk produ
 
             string rawResponse = await SendPromptAsync(compactSystemPrompt, userPrompt, 0.4, 700);
             return SanitizeAssistantResponse(rawResponse);
+        }
+
+        public static StockUnitIntent DetectStockUnitIntent(string? userQuery)
+        {
+            string query = NormalizeForIntent(userQuery);
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return StockUnitIntent.General;
+            }
+
+            if (ContainsAny(query, "seluruh", "seluruhnya", "total", "semua stok", "stok semua", "gabungan", "efektif"))
+            {
+                return StockUnitIntent.Total;
+            }
+
+            if (ContainsAny(query, "renceng", "rcg", "ecer", "eceran", "pcs", "biji", "satuan"))
+            {
+                return StockUnitIntent.ChildOnly;
+            }
+
+            if (ContainsAny(query, "dus", "box", "pak", "bal", "gudang", "karton", "unit besar"))
+            {
+                return StockUnitIntent.ParentOnly;
+            }
+
+            return StockUnitIntent.General;
+        }
+
+        public static string FormatDualStockResponse(ProductFamilyStock family, string userQuery, bool includePrices = true)
+        {
+            StockUnitIntent intent = DetectStockUnitIntent(userQuery);
+            string familyName = family.FamilyName;
+            string parentUnit = SafeUnit(family.ParentProduct.Unit, "unit besar");
+            string childUnit = SafeUnit(family.ChildProduct.Unit, "unit kecil");
+            string parentStock = FormatStockNumber(family.ParentStock);
+            string childStock = FormatStockNumber(family.ChildStock);
+            string totalParent = FormatStockNumber(family.TotalParentStock);
+            string totalChild = FormatStockNumber(family.TotalChildStock);
+
+            if (intent == StockUnitIntent.ChildOnly)
+            {
+                return $"Stok eceran {familyName} saat ini {childStock} {childUnit}. " +
+                       $"Stok efektif gabungan jika semua {parentUnit} dipecah: {totalChild} {childUnit}.";
+            }
+
+            if (intent == StockUnitIntent.ParentOnly)
+            {
+                return $"Stok {parentUnit} utuh {familyName} saat ini {parentStock} {parentUnit}. " +
+                       $"Stok efektif gabungan termasuk eceran: {totalParent} {parentUnit}.";
+            }
+
+            if (intent == StockUnitIntent.Total)
+            {
+                return $"Total stok seluruhnya {familyName}: {totalParent} {parentUnit} " +
+                       $"(setara {totalChild} {childUnit}).";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{familyName} (Produk Dual Stok)");
+            sb.AppendLine($"- Stok fisik: {parentStock} {parentUnit} & {childStock} {childUnit}");
+            sb.AppendLine($"- Stok efektif: {totalParent} {parentUnit} (atau {totalChild} {childUnit})");
+            if (includePrices)
+            {
+                sb.AppendLine($"- Harga: Rp {(family.ParentProduct.SellingPrice ?? 0):N0}/{parentUnit} | Rp {(family.ChildProduct.SellingPrice ?? 0):N0}/{childUnit}");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private static bool ContainsAny(string text, params string[] terms)
+        {
+            return terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string NormalizeForIntent(string? value)
+        {
+            return Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim().ToLowerInvariant();
+        }
+
+        private static string FormatStockNumber(decimal value)
+        {
+            return value.ToString("0.##", CultureInfo.InvariantCulture);
+        }
+
+        private static string SafeUnit(string? unit, string fallback)
+        {
+            return string.IsNullOrWhiteSpace(unit) ? fallback : unit.Trim();
         }
 
         private static string TrimPromptSection(string value, int maxChars)

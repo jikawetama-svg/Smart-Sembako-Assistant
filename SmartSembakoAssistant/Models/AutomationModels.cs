@@ -248,6 +248,42 @@ namespace SmartSembakoAssistant.Models
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
     }
 
+    public enum StockUnitIntent
+    {
+        General,
+        ParentOnly,
+        ChildOnly,
+        Total
+    }
+
+    public class ProductFamilyStock
+    {
+        public UnitConversionMapping Mapping { get; set; } = new();
+        public Product ParentProduct { get; set; } = new();
+        public Product ChildProduct { get; set; } = new();
+        public decimal ParentStock { get; set; }
+        public decimal ChildStock { get; set; }
+        public decimal ConversionRate { get; set; }
+        public decimal TotalChildStock => ParentStock * ConversionRate + ChildStock;
+        public decimal TotalParentStock => ConversionRate > 0 ? TotalChildStock / ConversionRate : 0;
+        public string FamilyName => !string.IsNullOrWhiteSpace(Mapping.FamilyName)
+            ? Mapping.FamilyName!
+            : ParentProduct.Name ?? Mapping.ParentProductName ?? "Produk Dual Stok";
+    }
+
+    public class StockMutationDocument
+    {
+        public long DocumentId { get; set; }
+        public int DocumentTypeId { get; set; }
+        public DateTime Date { get; set; }
+        public string? InternalNote { get; set; }
+        public string ProductId { get; set; } = "";
+        public string? ProductName { get; set; }
+        public string? Unit { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal ExpectedQuantity { get; set; }
+    }
+
     public class InboundEventRecord
     {
         public long Id { get; set; }

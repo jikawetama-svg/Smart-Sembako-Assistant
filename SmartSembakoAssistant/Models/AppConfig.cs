@@ -24,8 +24,8 @@ namespace SmartSembakoAssistant.Models
         public string? ApiKey { get; set; }
         public string? Model { get; set; } = "llama-3.3-70b-versatile";
         public string? FallbackApiKey { get; set; } // Gemini
-        public string? FallbackModel { get; set; } = "gemini-3.1-flash-lite";
-        public string? VisionModel { get; set; } = "gemini-3.1-flash-lite";
+        public string? FallbackModel { get; set; } = "gemini-2.5-flash";
+        public string? VisionModel { get; set; } = "gemini-2.5-flash";
         public int TimeoutSeconds { get; set; } = 30;
         public int MaxTokens { get; set; } = 500; // Reduced from 1000 to avoid rate limit
         public double Temperature { get; set; } = 0.7;
@@ -150,6 +150,10 @@ namespace SmartSembakoAssistant.Models
         public bool EnableReceivableAlerts { get; set; } = false;
         public bool EnableExpiryAlerts { get; set; } = false;
         public bool EnableAnomalyAlerts { get; set; } = false;
+        public bool EnableDualStockSync { get; set; } = true;
+        public bool EnableDualStockRealtimeWatcher { get; set; } = false;
+        public int DualStockSyncIntervalSeconds { get; set; } = 15;
+        public string? DualStockDailySyncTime { get; set; } = "21:00";
         public string? DailySummaryTime { get; set; } = "07:00";
         public string? LowStockAlertTime { get; set; } = "07:00";
         public string? ReceivableAlertTime { get; set; } = "08:00";
@@ -158,6 +162,9 @@ namespace SmartSembakoAssistant.Models
         public bool EnableTelegramLowStockAlerts { get; set; } = false;
         public bool EnableWhatsAppCloudLowStockAlerts { get; set; } = false;
         public bool EnableBaileysLowStockAlerts { get; set; } = false;
+        public bool EnableTelegramDualStockAlerts { get; set; } = true;
+        public bool EnableWhatsAppCloudDualStockAlerts { get; set; } = false;
+        public bool EnableBaileysDualStockAlerts { get; set; } = false;
         public List<AutomationTemplate>? Templates { get; set; }
         public List<AutomationRule>? Rules { get; set; }
     }

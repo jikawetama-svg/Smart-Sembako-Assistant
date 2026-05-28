@@ -1,10 +1,10 @@
 {
   "Groq": {
     "ApiKey": "YOUR_GROQ_API_KEY",
-    "Model": "llama-3.1-8b-instant",
+    "Model": "llama-3.3-70b-versatile",
     "FallbackApiKey": "YOUR_GEMINI_API_KEY",
-    "FallbackModel": "gemini-3.1-flash-lite",
-    "VisionModel": "gemini-3.1-flash-lite",
+    "FallbackModel": "gemini-2.5-flash",
+    "VisionModel": "gemini-2.5-flash",
     "TimeoutSeconds": 30,
     "MaxTokens": 500,
     "Temperature": 0.3
@@ -76,6 +76,13 @@
     "EnableReceivableAlerts": false,
     "EnableExpiryAlerts": false,
     "EnableAnomalyAlerts": false,
+    "EnableDualStockSync": true,
+    "EnableDualStockRealtimeWatcher": false,
+    "EnableTelegramDualStockAlerts": true,
+    "EnableWhatsAppCloudDualStockAlerts": false,
+    "EnableBaileysDualStockAlerts": false,
+    "DualStockSyncIntervalSeconds": 15,
+    "DualStockDailySyncTime": "21:00",
     "DailySummaryTime": "07:00",
     "LowStockAlertTime": "07:00",
     "ReceivableAlertTime": "08:00",

@@ -3247,6 +3247,160 @@ namespace SmartSembakoAssistant.Services
             return (0, 0);
         }
 
+        public async Task<long> GetLatestStockMutationDocumentIdAsync()
+        {
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return 0;
+                }
+
+                string sql = $@"
+                    SELECT COALESCE(MAX(d.Id), 0)
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId IN (2, 3)";
+                using var command = new SqliteCommand(sql, connection);
+                return Convert.ToInt64(await command.ExecuteScalarAsync() ?? 0);
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading latest stock mutation document id: {ex.Message}", "Database", ex.ToString());
+                }
+
+                return 0;
+            }
+        }
+
+        public async Task<List<StockMutationDocument>> GetStockMutationDocumentsAfterAsync(long lastDocumentId, int limit = 100)
+        {
+            var results = new List<StockMutationDocument>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                string? productTable = FindTable(tables, new[] { "Product", "products", "item" });
+                if (string.IsNullOrEmpty(documentTable) ||
+                    string.IsNullOrEmpty(documentItemTable) ||
+                    string.IsNullOrEmpty(productTable))
+                {
+                    return results;
+                }
+
+                string sql = $@"
+                    SELECT
+                        d.Id,
+                        d.DocumentTypeId,
+                        COALESCE(NULLIF(d.StockDate, ''), NULLIF(d.DateUpdated, ''), NULLIF(d.DateCreated, ''), d.Date) AS Date,
+                        d.InternalNote,
+                        di.ProductId,
+                        p.Name,
+                        p.MeasurementUnit,
+                        COALESCE(di.Quantity, 0),
+                        COALESCE(di.ExpectedQuantity, 0)
+                    FROM {ValidateTableName(documentTable)} d
+                    INNER JOIN {ValidateTableName(documentItemTable)} di ON di.DocumentId = d.Id
+                    LEFT JOIN {ValidateTableName(productTable)} p ON p.Id = di.ProductId
+                    WHERE d.Id > @lastDocumentId
+                      AND d.DocumentTypeId IN (2, 3)
+                    ORDER BY d.Id ASC, di.Id ASC
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@lastDocumentId", lastDocumentId);
+                command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    results.Add(new StockMutationDocument
+                    {
+                        DocumentId = reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0)),
+                        DocumentTypeId = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1)),
+                        Date = SafeConvertToDateTime(reader, 2) ?? DateTime.Now,
+                        InternalNote = reader.IsDBNull(3) ? null : reader.GetValue(3).ToString(),
+                        ProductId = reader.IsDBNull(4) ? string.Empty : reader.GetValue(4).ToString() ?? string.Empty,
+                        ProductName = reader.IsDBNull(5) ? null : reader.GetValue(5).ToString(),
+                        Unit = reader.IsDBNull(6) ? null : reader.GetValue(6).ToString(),
+                        Quantity = SafeConvertToDecimal(reader, 7) ?? 0,
+                        ExpectedQuantity = SafeConvertToDecimal(reader, 8) ?? 0
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading stock mutation documents: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return results;
+        }
+
+        public async Task<bool> HasDualStockDocumentForTriggerAsync(long triggerDocumentId, string mappingId, string action)
+        {
+            if (triggerDocumentId <= 0 ||
+                string.IsNullOrWhiteSpace(mappingId) ||
+                string.IsNullOrWhiteSpace(action))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return false;
+                }
+
+                string sql = $@"
+                    SELECT 1
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId = 3
+                      AND instr(COALESCE(d.InternalNote, ''), @prefix) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @triggerToken) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @mappingToken) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @actionToken) > 0
+                    LIMIT 1";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@prefix", "SSA DualStock");
+                command.Parameters.AddWithValue("@triggerToken", $"trigger={triggerDocumentId}");
+                command.Parameters.AddWithValue("@mappingToken", $"map={mappingId}");
+                command.Parameters.AddWithValue("@actionToken", $"action={action}");
+                return await command.ExecuteScalarAsync() != null;
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error checking dual stock trigger dedupe: {ex.Message}", "Database", ex.ToString());
+                }
+
+                return false;
+            }
+        }
+
         /// <summary>
         /// Mendapatkan Dead Stock (Tidak laku > 14 hari)
         /// </summary>
@@ -3901,7 +4055,9 @@ namespace SmartSembakoAssistant.Services
             decimal? productCostOverride = null,
             decimal? documentPriceOverride = null,
             string? internalNoteOverride = null,
-            bool updateMasterCost = true)
+            bool updateMasterCost = true,
+            bool allowNegativeTarget = false,
+            DateTime? documentDateOverride = null)
         {
             var result = new RestockResult { Success = false };
 
@@ -3931,7 +4087,7 @@ namespace SmartSembakoAssistant.Services
                         return result;
                     }
 
-                    if (targetStock < 0)
+                    if (targetStock < 0 && !allowNegativeTarget)
                     {
                         result.Error = "Target stok tidak boleh negatif.";
                         return result;
@@ -3962,8 +4118,9 @@ namespace SmartSembakoAssistant.Services
                     string docNumber = await GenerateNextDocumentNumberAsync(connection, transaction, inventoryTypeId);
 
                     // Format tanggal
-                    string today = DateTime.Now.ToString("yyyy-MM-dd") + " 00:00:00";
-                    string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.ffffff");
+                    DateTime documentDate = documentDateOverride ?? DateTime.Now;
+                    string today = documentDate.ToString("yyyy-MM-dd") + " 00:00:00";
+                    string now = documentDate.ToString("yyyy-MM-dd HH:mm:ss.ffffff");
 
                     // 2. Ambil stok saat ini dari Stock.Quantity (sumber kebenaran Aronium)
                     // BUKAN dari SUM(DocumentItem) — itu hanya histori/log
@@ -3984,9 +4141,9 @@ namespace SmartSembakoAssistant.Services
                         return result;
                     }
 
-                    // Untuk Inventory Count Aronium, Quantity perlu menyimpan stok akhir
-                    // sedangkan ExpectedQuantity menyimpan stok sebelum perubahan.
-                    // Selisih tetap dihitung dari target - currentStock untuk log/bot.
+                    // Untuk Inventory Count sesuai QUICK_INVENTORY.md:
+                    // Quantity menyimpan stok akhir / target stock,
+                    // ExpectedQuantity menyimpan stok sebelum perubahan.
                     decimal actualQuantity = targetStock;
                     decimal expectedQuantity = currentStock;
 
@@ -4031,7 +4188,7 @@ namespace SmartSembakoAssistant.Services
                     decimal total = selisih * productPrice;
                     string internalNote = !string.IsNullOrWhiteSpace(internalNoteOverride)
                         ? internalNoteOverride!
-                        : $"Quick inventory {DateTime.Now:MM/dd/yyyy h:mm:ss tt}";
+                        : $"Quick inventory {documentDate:MM/dd/yyyy h:mm:ss tt}";
 
                     using var cmdDoc = new SqliteCommand(insertDocSql, connection, transaction);
                     cmdDoc.Parameters.AddWithValue("@number", docNumber);
@@ -4307,7 +4464,10 @@ namespace SmartSembakoAssistant.Services
 
         public async Task<BulkDocumentResult> CreateBulkInventoryCountDocumentAsync(
             IReadOnlyCollection<BulkDocumentItemInput> items,
-            int userId = 1)
+            int userId = 1,
+            string? internalNoteOverride = null,
+            bool allowNegativeTargets = false,
+            DateTime? documentDateOverride = null)
         {
             var result = new BulkDocumentResult { Success = false };
             if (items == null || items.Count == 0)
@@ -4336,7 +4496,7 @@ namespace SmartSembakoAssistant.Services
                     var validatedItems = new List<(BulkDocumentItemInput Input, ValidatedProductData Product, StockSnapshot Stock, decimal CurrentStock, decimal TargetStock, decimal Adjustment)>();
                     foreach (var item in items)
                     {
-                        if (item.Quantity < 0)
+                        if (item.Quantity < 0 && !allowNegativeTargets)
                         {
                             throw new InvalidOperationException($"Target stok untuk produk {item.ProductName} tidak boleh negatif.");
                         }
@@ -4362,10 +4522,13 @@ namespace SmartSembakoAssistant.Services
 
                     int inventoryTypeId = 3;
                     string docNumber = await GenerateNextDocumentNumberAsync(connection, transaction, inventoryTypeId);
-                    string today = DateTime.Now.ToString("yyyy-MM-dd") + " 00:00:00";
-                    string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.ffffff");
+                    DateTime documentDate = documentDateOverride ?? DateTime.Now;
+                    string today = documentDate.ToString("yyyy-MM-dd") + " 00:00:00";
+                    string now = documentDate.ToString("yyyy-MM-dd HH:mm:ss.ffffff");
                     decimal total = validatedItems.Sum(x => x.Adjustment * x.Product.Price);
-                    string internalNote = $"Quick inventory {DateTime.Now:MM/dd/yyyy h:mm:ss tt}";
+                    string internalNote = !string.IsNullOrWhiteSpace(internalNoteOverride)
+                        ? internalNoteOverride!
+                        : $"Quick inventory {documentDate:MM/dd/yyyy h:mm:ss tt}";
 
                     const string insertDocSql = @"
                         INSERT INTO Document
@@ -6011,6 +6174,15 @@ namespace SmartSembakoAssistant.Services
             return await AdjustStockInternalAsync(productId, adjustmentQty, null, userId);
         }
 
+        public async Task<RestockResult> AdjustStockAllowNegativeAsync(
+            string productId,
+            decimal adjustmentQty,
+            int userId = 1,
+            string? internalNote = null)
+        {
+            return await AdjustStockInternalAsync(productId, adjustmentQty, null, userId, true, internalNote, allowNegativeTarget: true);
+        }
+
         public async Task<RestockResult> AdjustStockWithCostAsync(
             string productId,
             decimal adjustmentQty,
@@ -6029,7 +6201,8 @@ namespace SmartSembakoAssistant.Services
             decimal? unitCostOverride,
             int userId = 1,
             bool updateMasterCost = true,
-            string? internalNote = null)
+            string? internalNote = null,
+            bool allowNegativeTarget = false)
         {
             if (string.IsNullOrWhiteSpace(productId))
             {
@@ -6054,7 +6227,7 @@ namespace SmartSembakoAssistant.Services
 
             decimal currentStock = product.Stock ?? 0;
             decimal targetStock = currentStock + adjustmentQty;
-            if (targetStock < 0)
+            if (targetStock < 0 && !allowNegativeTarget)
             {
                 return new RestockResult
                 {
@@ -6070,7 +6243,9 @@ namespace SmartSembakoAssistant.Services
                 unitCostOverride,
                 unitCostOverride,
                 internalNote,
-                updateMasterCost);
+                updateMasterCost,
+                allowNegativeTarget,
+                documentDateOverride: null);
         }
 
         /// <summary>

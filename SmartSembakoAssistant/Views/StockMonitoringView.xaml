@@ -149,6 +149,16 @@
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
+                    <DataGridTextColumn Header="Stok Efektif" Binding="{Binding EffectiveStockText}" Width="130">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="#10B981"/>
+                                <Setter Property="FontWeight" Value="Bold"/>
+                                <Setter Property="Margin" Value="10,0"/>
+                                <Setter Property="ToolTip" Value="{Binding ConversionRelationText}"/>
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
                     <DataGridTextColumn Header="Satuan" Binding="{Binding Unit}" Width="85"/>
                     <DataGridTextColumn Header="Harga Beli" Binding="{Binding PurchasePrice, StringFormat='Rp {0:N0}'}" Width="120"/>
                     <DataGridTextColumn Header="Harga Jual" Binding="{Binding SellingPrice, StringFormat='Rp {0:N0}'}" Width="120"/>

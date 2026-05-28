@@ -27,6 +27,7 @@ namespace SmartSembakoAssistant.Services
         private TunnelManager? _tunnelManager;
         private PeriodicTimer? _automationTimer;
         private PeriodicTimer? _outboxTimer;
+        private PeriodicTimer? _dualStockWatcherTimer;
         private CancellationTokenSource? _workerCts;
         private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
         private readonly Queue<DateTime> _baileysSentAt = new();
@@ -278,7 +279,10 @@ namespace SmartSembakoAssistant.Services
             _workerCts = new CancellationTokenSource();
             _automationTimer = new PeriodicTimer(TimeSpan.FromMinutes(1));
             _outboxTimer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+            _dualStockWatcherTimer = new PeriodicTimer(TimeSpan.FromSeconds(_automationEngine.GetDualStockSyncIntervalSeconds()));
+            _ = Task.Run(() => RunDualStockWatcherLoopAsync(_workerCts.Token), _workerCts.Token);
 
+            _ = Task.Run(() => RunDualStockStartupCatchUpAsync(_workerCts.Token), _workerCts.Token);
             _ = Task.Run(() => RunAutomationLoopAsync(_workerCts.Token), _workerCts.Token);
             _ = Task.Run(() => RunOutboxLoopAsync(_workerCts.Token), _workerCts.Token);
         }
@@ -311,6 +315,18 @@ namespace SmartSembakoAssistant.Services
 
         private async Task StopCoreAsync()
         {
+            if (_automationEngine != null)
+            {
+                try
+                {
+                    await _automationEngine.RunDualStockShutdownSyncAsync();
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogErrorAsync($"Dual stock shutdown sync gagal: {ex.Message}", "DualStockWatcher", ex.ToString());
+                }
+            }
+
             _workerCts?.Cancel();
             _workerCts?.Dispose();
             _workerCts = null;
@@ -318,6 +334,8 @@ namespace SmartSembakoAssistant.Services
             _automationTimer = null;
             _outboxTimer?.Dispose();
             _outboxTimer = null;
+            _dualStockWatcherTimer?.Dispose();
+            _dualStockWatcherTimer = null;
             SetActiveBotRuntime(false);
 
             if (_telegramService != null)
@@ -383,6 +401,7 @@ namespace SmartSembakoAssistant.Services
                 try
                 {
                     var messages = await _automationEngine.RunBackgroundAutomationAsync();
+                    messages.AddRange(await _automationEngine.RunDualStockScheduledSyncAsync());
                     await _automationEngine.EnqueueOutboundMessagesAsync(messages);
                 }
                 catch (OperationCanceledException)
@@ -392,6 +411,57 @@ namespace SmartSembakoAssistant.Services
                 catch (Exception ex)
                 {
                     await _loggingService.LogErrorAsync($"Background automation error: {ex.Message}", "Automation", ex.ToString());
+                }
+            }
+        }
+
+        private async Task RunDualStockStartupCatchUpAsync(CancellationToken cancellationToken)
+        {
+            if (_automationEngine == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await _automationEngine.RunDualStockStartupCatchUpAsync();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // shutdown
+            }
+            catch (Exception ex)
+            {
+                await _loggingService.LogErrorAsync($"Dual stock startup catch-up error: {ex.Message}", "DualStockWatcher", ex.ToString());
+            }
+        }
+
+        private async Task RunDualStockWatcherLoopAsync(CancellationToken cancellationToken)
+        {
+            if (_dualStockWatcherTimer == null || _automationEngine == null)
+            {
+                return;
+            }
+
+            while (await _dualStockWatcherTimer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    if (!_automationEngine.IsDualStockRealtimeWatcherEnabled())
+                    {
+                        continue;
+                    }
+
+                    var messages = await _automationEngine.RunDatabaseSyncWatcherAsync();
+                    await _automationEngine.EnqueueOutboundMessagesAsync(messages);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogErrorAsync($"Dual stock watcher error: {ex.Message}", "DualStockWatcher", ex.ToString());
                 }
             }
         }

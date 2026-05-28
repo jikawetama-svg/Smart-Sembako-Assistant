@@ -81,6 +81,12 @@ namespace SmartSembakoAssistant.Services
                 return $"Produk \"{query}\" tidak ditemukan.";
             }
 
+            string? familyResponse = await TryBuildFamilyStockResponseAsync(query, matches, products);
+            if (!string.IsNullOrWhiteSpace(familyResponse))
+            {
+                return familyResponse;
+            }
+
             return "Hasil pencarian stok:\n" + string.Join("\n", matches.Select(p => $"- {p.Name}: {p.Stock} {p.Unit}"));
         }
 
@@ -131,6 +137,61 @@ namespace SmartSembakoAssistant.Services
             return isOwner
                 ? "Command: /stok, /laporan, /pelanggan, /supplier, /user, /penjualan, /dokumen, /restock, /inventory, /analisa, /help"
                 : "Command: /stok, /laporan, /help";
+        }
+
+        private async Task<string?> TryBuildFamilyStockResponseAsync(string query, List<Product> matches, List<Product> allProducts)
+        {
+            var matchedIds = matches
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .Select(product => product.Id!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (matchedIds.Count == 0)
+            {
+                return null;
+            }
+
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            var mapping = mappings.FirstOrDefault(item =>
+                matchedIds.Contains(item.ParentProductId) ||
+                matchedIds.Contains(item.ChildProductId));
+            if (mapping == null)
+            {
+                return null;
+            }
+
+            var productById = allProducts
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .GroupBy(product => product.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            if (!productById.TryGetValue(mapping.ParentProductId, out var parent) ||
+                !productById.TryGetValue(mapping.ChildProductId, out var child))
+            {
+                return null;
+            }
+
+            var family = new ProductFamilyStock
+            {
+                Mapping = mapping,
+                ParentProduct = parent,
+                ChildProduct = child,
+                ParentStock = parent.Stock ?? 0,
+                ChildStock = child.Stock ?? 0,
+                ConversionRate = mapping.ConversionRate
+            };
+
+            var response = GroqService.FormatDualStockResponse(family, query);
+            var otherMatches = matches
+                .Where(product => !string.Equals(product.Id, mapping.ParentProductId, StringComparison.OrdinalIgnoreCase) &&
+                                  !string.Equals(product.Id, mapping.ChildProductId, StringComparison.OrdinalIgnoreCase))
+                .Take(5)
+                .ToList();
+            if (!otherMatches.Any())
+            {
+                return response;
+            }
+
+            return response + "\n\nProduk lain:\n" +
+                   string.Join("\n", otherMatches.Select(product => $"- {product.Name}: {product.Stock} {product.Unit}"));
         }
     }
 }
