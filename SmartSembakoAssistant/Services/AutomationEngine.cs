@@ -25,6 +25,8 @@ namespace SmartSembakoAssistant.Services
             public decimal? CurrentStock { get; set; }
             public string? Unit { get; set; }
             public int? IsiPerBox { get; set; }
+            public string? MappingSource { get; set; }
+            public string? MappingTrustLevel { get; set; }
             public List<string> RawProductNames { get; set; } = new();
         }
 
@@ -274,6 +276,7 @@ namespace SmartSembakoAssistant.Services
 
         private const string StateLastDailySummaryDate = "automation.last_daily_summary_date";
         private const string StateLastLowStockAlertDate = "automation.last_low_stock_alert_date";
+        private const string StateLastWeeklyReportDate = "automation.last_weekly_report_date";
         private const string StateLegacyLastLowStockAlertAt = "automation.last_low_stock_alert_at";
         private const string StateLastWebhookReceivedAt = "integration.last_webhook_received_at";
         private const string StateLastWebhookStatus = "integration.last_webhook_status";
@@ -365,9 +368,11 @@ namespace SmartSembakoAssistant.Services
         private readonly ConcurrentDictionary<string, ShadowMappingPendingState> _shadowMappingPendingBySender = new();
         private readonly ConcurrentDictionary<string, byte> _priceOverrideProcessingByKey = new();
         private readonly ConcurrentDictionary<string, ConfirmProcessingResult> _priceOverrideCompletedByKey = new();
+        private readonly ConcurrentDictionary<string, DateTime> _lastAIInsightBySender = new();
         private Func<ChannelType, string, string, string, Task<string?>>? _documentSender;
 
         private DateTime? _lastDailySummaryDate;
+        private DateTime? _lastWeeklyReportDate;
         private DateTime? _lastLowStockAlertDate;
         private DateTime? _lastReceivableAlertDate;
         private DateTime? _lastExpiryAlertDate;
@@ -698,7 +703,7 @@ namespace SmartSembakoAssistant.Services
                 _lastDailySummaryDate != DateTime.Today &&
                 ShouldExecuteBackgroundTrigger("Schedule", null, out _))
             {
-                outputs.AddRange(BuildOwnerBroadcasts(await BuildDailySummaryAsync(), "Schedule"));
+                outputs.AddRange(BuildDailySummaryBroadcasts(await BuildDailySummaryAsync(), "Schedule"));
                 if (_configService.Config?.GoogleSheets?.Enabled == true)
                 {
                     try
@@ -719,6 +724,18 @@ namespace SmartSembakoAssistant.Services
 
                 _lastDailySummaryDate = DateTime.Today;
                 await _databaseService.SetRuntimeStateAsync(StateLastDailySummaryDate, DateTime.Today.ToString("yyyy-MM-dd"));
+            }
+
+            if (automation.EnableWeeklyReport &&
+                DateTime.Now.DayOfWeek == DayOfWeek.Monday &&
+                TimeSpan.TryParse(automation.WeeklyReportTime ?? "07:00", out var weeklyReportTime) &&
+                DateTime.Now.TimeOfDay >= weeklyReportTime &&
+                _lastWeeklyReportDate != DateTime.Today &&
+                ShouldExecuteBackgroundTrigger("WeeklyReport", null, out _))
+            {
+                outputs.AddRange(BuildWeeklyReportBroadcasts(await BuildWeeklyReportAsync(), "WeeklyReport"));
+                _lastWeeklyReportDate = DateTime.Today;
+                await _databaseService.SetRuntimeStateAsync(StateLastWeeklyReportDate, DateTime.Today.ToString("yyyy-MM-dd"));
             }
 
             if (automation.EnableReceivableAlerts &&
@@ -945,10 +962,14 @@ namespace SmartSembakoAssistant.Services
                 return;
             }
 
-            var watcherMessages = await RunDatabaseSyncWatcherAsync();
-            await EnqueueOutboundMessagesAsync(watcherMessages);
+            if (IsDualStockRealtimeWatcherEnabled())
+            {
+                var watcherMessages = await RunDatabaseSyncWatcherAsync();
+                await EnqueueOutboundMessagesAsync(watcherMessages);
+            }
 
-            var scan = await RunDualStockEquilibriumScanAsync(yesterday.Add(syncTime), "startup catch-up daily sync");
+            var catchUp = await ResolveDualStockCatchUpTimestampAsync(yesterday.Add(syncTime));
+            var scan = await RunDualStockEquilibriumScanAsync(catchUp.DocumentTimestamp, catchUp.Reason);
             if (scan.Alerts.Any())
             {
                 await EnqueueOutboundMessagesAsync(BuildDualStockAlertBroadcasts(
@@ -957,6 +978,32 @@ namespace SmartSembakoAssistant.Services
             }
 
             await _databaseService.SetRuntimeStateAsync(StateLastDualStockDailySyncDate, yesterday.ToString("yyyy-MM-dd"));
+        }
+
+        private async Task<DualStockCatchUpDecision> ResolveDualStockCatchUpTimestampAsync(DateTime missedSyncAt)
+        {
+            DateTime? latestMutationAt = _posDbService == null
+                ? null
+                : await _posDbService.GetLatestStockMutationDateAsync();
+
+            bool hasNewerMutations = latestMutationAt.HasValue && latestMutationAt.Value > missedSyncAt;
+            DateTime documentTimestamp = missedSyncAt;
+            string reason = "startup catch-up daily sync";
+
+            if (hasNewerMutations)
+            {
+                DateTime now = DateTime.Now;
+                documentTimestamp = now > latestMutationAt!.Value
+                    ? now
+                    : latestMutationAt.Value.AddSeconds(1);
+                reason = "startup catch-up current-time sync";
+            }
+
+            await _loggingService.LogInfoAsync(
+                $"[DualStockStartupCatchUp] missedSyncAt={missedSyncAt:yyyy-MM-dd HH:mm:ss} latestMutationAt={(latestMutationAt.HasValue ? latestMutationAt.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "-")} documentTimestamp={documentTimestamp:yyyy-MM-dd HH:mm:ss} reason={reason}",
+                "DualStockWatcher");
+
+            return new DualStockCatchUpDecision(documentTimestamp, hasNewerMutations, reason);
         }
 
         public async Task<string> ForceDualStockDailySyncAsync(DateTime? documentTimestamp = null, string reason = "manual daily sync")
@@ -1324,6 +1371,7 @@ namespace SmartSembakoAssistant.Services
                 documentTimestamp);
         }
 
+        private sealed record DualStockCatchUpDecision(DateTime DocumentTimestamp, bool HasNewerMutations, string Reason);
         private sealed record DualStockScanResult(int Processed, List<string> Alerts);
         private sealed record DualStockTarget(Product Product, decimal TargetStock);
 
@@ -1795,6 +1843,13 @@ namespace SmartSembakoAssistant.Services
                 "/stok" => await HandleStockAsync(args, context),
                 "/laporan" => await HandleReportAsync(context.IsOwner, args),
                 "/laporan_periode" => context.IsOwner ? await HandlePeriodReportCommandAsync(args, context) : BuildOwnerOnlyDeniedMessage(),
+                "/tren" => context.IsOwner ? await HandleTrendCommandAsync(args) : BuildOwnerOnlyDeniedMessage(),
+                "/laporan_mingguan" => context.IsOwner ? await HandleWeeklyReportAsync() : BuildOwnerOnlyDeniedMessage(),
+                "/laporan_bulanan" => context.IsOwner ? await HandleMonthlyTrendAsync(args) : BuildOwnerOnlyDeniedMessage(),
+                "/tren_produk" => context.IsOwner ? await HandleProductTrendAsync(args) : BuildOwnerOnlyDeniedMessage(),
+                "/jam_sibuk" => context.IsOwner ? await HandleHourlySalesAsync(args) : BuildOwnerOnlyDeniedMessage(),
+                "/analisa_ai" => context.IsOwner ? await HandleAIInsightAsync(context) : BuildOwnerOnlyDeniedMessage(),
+                "/forecast" => context.IsOwner ? await HandleForecastAsync() : BuildOwnerOnlyDeniedMessage(),
                 "/statistik" => context.IsOwner ? await HandleStatisticsAsync() : BuildOwnerOnlyDeniedMessage(),
                 "/produk" => context.IsOwner ? await HandleProductsCommandAsync(args, context) : BuildOwnerOnlyDeniedMessage(),
                 "/pelanggan_loyal" => CanUseOperationalFeatures(context) ? await HandleLoyalCustomersAsync(context) : BuildOwnerOnlyDeniedMessage(),
@@ -1812,7 +1867,7 @@ namespace SmartSembakoAssistant.Services
                 "/inventory_family" => CanUseOperationalFeatures(context) ? await QueueInventoryFamilyAsync(message, args) : "Akses ditolak. Fitur inventory family hanya untuk owner/kasir.",
                 "/analisa" => context.IsOwner ? await HandleAnalysisAsync() : "Akses ditolak. Fitur analisa hanya untuk owner.",
                 "/analisa_stok" => context.IsOwner ? await HandleStockMovementAnalysisAsync() : "Akses ditolak. Fitur analisa stok hanya untuk owner.",
-                "/cek_modal" => context.IsOwner ? await HandleZeroCostAsync() : "Akses ditolak. Fitur cek modal hanya untuk owner.",
+                "/cek_modal" => context.IsOwner ? await HandleZeroCostAsync(args) : "Akses ditolak. Fitur cek modal hanya untuk owner.",
                 "/laporan_kasir" => context.IsOwner ? await HandleCashierReportAsync(args) : "Akses ditolak. Fitur laporan kasir hanya untuk owner.",
                 "/dead_stock" => context.IsOwner ? await HandleDeadStockAsync() : "Akses ditolak. Fitur dead stock hanya untuk owner.",
                 "/slow_moving" => context.IsOwner ? await HandleSlowMovingProductsAsync() : "Akses ditolak. Fitur slow moving hanya untuk owner.",
@@ -2011,6 +2066,27 @@ namespace SmartSembakoAssistant.Services
             sb.AppendLine(transactionCount == 0
                 ? $"  {IconReceipt} Transaksi: 0"
                 : $"  {IconReceipt} Transaksi: {transactionCount}");
+
+            if (singleDay)
+            {
+                DateTime previousDay = reportDate.AddDays(-1);
+                DateTime avgStart = reportDate.AddDays(-7);
+                DateTime avgEnd = reportDate.AddDays(-1);
+                decimal yesterdayRevenue = await _posDbService.GetSalesRevenueAsync(previousDay, previousDay);
+                decimal average7Days = (await _posDbService.GetDailyTrendAsync(8))
+                    .Where(item => item.Date.Date < reportDate.Date)
+                    .TakeLast(7)
+                    .DefaultIfEmpty()
+                    .Average(item => item?.Revenue ?? 0);
+                if (average7Days == 0)
+                {
+                    decimal previous7Revenue = await _posDbService.GetSalesRevenueAsync(avgStart, avgEnd);
+                    average7Days = previous7Revenue / 7m;
+                }
+
+                sb.AppendLine($"  Vs kemarin: {BuildTrendIcon(CalculateGrowthPercent(revenue, yesterdayRevenue))} {FormatSignedPercent(CalculateGrowthPercent(revenue, yesterdayRevenue))} ({FormatCurrency(yesterdayRevenue)})");
+                sb.AppendLine($"  Vs avg 7hr: {BuildTrendIcon(CalculateGrowthPercent(revenue, average7Days))} {FormatSignedPercent(CalculateGrowthPercent(revenue, average7Days))} ({FormatCurrency(average7Days)}/hari)");
+            }
 
             if (isOwner && noCostRevenuePercent > 0)
             {
@@ -2357,10 +2433,13 @@ namespace SmartSembakoAssistant.Services
             decimal growthPct = revenueLastMonth == 0
                 ? (revenueMtd > 0 ? 100 : 0)
                 : ((revenueMtd - revenueLastMonth) / revenueLastMonth) * 100;
+            int daysInMonth = DateTime.DaysInMonth(today.Year, today.Month);
+            decimal monthForecast = revenueMtd / elapsedDays * daysInMonth;
 
             decimal avgTransactionsPerDay = transactionMtd / (decimal)elapsedDays;
             int newCustomers = await _posDbService.GetNewCustomerCountAsync(monthStart, today);
             var topSelling = await _posDbService.GetTopSellingProductsAsync(monthStart, today, 5);
+            var monthlyTrend = await _posDbService.GetMonthlySalesTrendAsync(3);
             var topProfit = topSelling
                 .OrderByDescending(item => item.Profit)
                 .ThenByDescending(item => item.Revenue)
@@ -2376,8 +2455,19 @@ namespace SmartSembakoAssistant.Services
             sb.AppendLine($"Profit MTD: {FormatCurrency(profitMtd)}");
             sb.AppendLine($"Omzet bulan lalu: {FormatCurrency(revenueLastMonth)}");
             sb.AppendLine($"Growth omzet: {growthPct:+0.##;-0.##;0}%");
+            sb.AppendLine($"Estimasi kasar akhir bulan: {FormatCurrency(monthForecast)}");
             sb.AppendLine($"Rata-rata transaksi/hari: {avgTransactionsPerDay:0.##}");
             sb.AppendLine($"Pelanggan baru bulan ini: {newCustomers}");
+
+            if (monthlyTrend.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Tren 3 bulan:");
+                foreach (var item in monthlyTrend)
+                {
+                    sb.AppendLine($"- {item.Label}: {FormatCurrency(item.Revenue)} ({FormatMonthlyGrowth(item)})");
+                }
+            }
 
             if (topSelling.Any())
             {
@@ -3146,6 +3236,11 @@ namespace SmartSembakoAssistant.Services
             }
 
             var match = Regex.Match(args.Trim(), @"^(?<name>.+?)\s+(?<qty>-?\d+(?:[.,]\d+)?)\s*(?<unit>[A-Za-z]+)?$", RegexOptions.IgnoreCase);
+            if (args.Contains(',', StringComparison.Ordinal))
+            {
+                return "Inventory family hanya menerima satu keluarga per perintah. Kirim satu per satu, contoh: /inventory_family kapal api mix 20 rcg";
+            }
+
             if (!match.Success || !TryParseDecimal(match.Groups["qty"].Value, out decimal targetQuantity) || targetQuantity < 0)
             {
                 return "Format: /inventory_family <nama produk keluarga> <stok_target> <unit>\nContoh: /inventory_family kapal api mix 22 rcg";
@@ -3662,6 +3757,11 @@ namespace SmartSembakoAssistant.Services
 
             string key = GetConfirmationKey(message.Channel, message.SenderId);
             var pending = await _databaseService.GetPendingConfirmationAsync(key);
+            if (pending == null)
+            {
+                return "Tidak ada aksi yang menunggu konfirmasi.";
+            }
+
             await _databaseService.DeletePendingConfirmationAsync(key);
             if (pending?.Command == "price_override_confirmation")
             {
@@ -4052,7 +4152,7 @@ namespace SmartSembakoAssistant.Services
                 return $"OCR bulk restock gagal: {result.Error}";
             }
 
-            PersistConfirmedOcrMappings(payload.Items);
+            PersistConfirmedOcrMappings(payload.Items, supplierName);
             var shadowConversionResults = await ApplyShadowConversionAsync(payload.Items, pricePayload, decision);
             await ApplyMasterPriceOverridesAsync(pricePayload, decision);
 
@@ -4642,8 +4742,9 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
-        private void PersistConfirmedOcrMappings(IEnumerable<BulkPendingItem> items)
+        private void PersistConfirmedOcrMappings(IEnumerable<BulkPendingItem> items, string? supplierName = null)
         {
+            string supplierKey = ConfigService.NormalizeOcrSupplierKey(supplierName);
             foreach (var item in items)
             {
                 if (string.IsNullOrWhiteSpace(item.ProductId) || string.IsNullOrWhiteSpace(item.ProductName))
@@ -4658,7 +4759,14 @@ namespace SmartSembakoAssistant.Services
                         continue;
                     }
 
-                    _configService.AddOcrMapping(rawName, item.ProductId, item.ProductName);
+                    _configService.AddOcrMapping(
+                        rawName,
+                        item.ProductId,
+                        item.ProductName,
+                        supplierKey,
+                        item.MappingSource ?? "confirmed-ocr",
+                        "trusted",
+                        note: "Confirmed from OCR bulk restock.");
                 }
             }
         }
@@ -4742,6 +4850,7 @@ namespace SmartSembakoAssistant.Services
             var topSelling = await _posDbService.GetTopSellingProductsAsync(startOfWeek, DateTime.Now, 3);
             var lowStock = await _posDbService.GetLowStockProductsAsync(5);
             var deadStock = await _posDbService.GetDeadStockProductsAsync();
+            string anomalyNote = await BuildAnomalyInsightAsync();
 
             var sb = new StringBuilder();
             sb.AppendLine($"{IconChart} ANALISA BISNIS");
@@ -4776,14 +4885,44 @@ namespace SmartSembakoAssistant.Services
             sb.AppendLine();
             sb.AppendLine($"{IconBoxArchive} Dead stock: {deadStock.Count} produk");
             sb.AppendLine("   Ketik /dead_stock untuk detail");
+            if (!string.IsNullOrWhiteSpace(anomalyNote))
+            {
+                sb.AppendLine();
+                sb.AppendLine(anomalyNote);
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Lanjutan: /tren, /laporan_mingguan, /forecast");
             return sb.ToString().TrimEnd();
         }
 
-        private async Task<string> HandleZeroCostAsync()
+        private async Task<string> HandleZeroCostAsync(string args = "")
         {
             if (_posDbService == null)
             {
                 return "Database pos.db belum dikonfigurasi.";
+            }
+
+            string query = args.Trim();
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                var products = await FindProductsAsync(query, 10);
+                if (!products.Any())
+                {
+                    return $"Produk \"{query}\" tidak ditemukan.";
+                }
+
+                var sbFiltered = new StringBuilder();
+                sbFiltered.AppendLine($"{IconMoney} CEK MODAL - \"{query}\"");
+                sbFiltered.AppendLine();
+                foreach (var product in products)
+                {
+                    decimal modal = product.PurchasePrice ?? 0;
+                    string status = modal <= 0 ? $"{IconWarning} tanpa modal" : $"{IconCheck} ada modal";
+                    sbFiltered.AppendLine($"{FormatOptional(product.Name)} | {status} | modal {FormatCurrency(modal)} | jual {FormatCurrency(product.SellingPrice ?? 0)} | stok {FormatStockValue(product.Stock ?? 0)} {GetUnitLabel(product.Unit)}");
+                }
+
+                return sbFiltered.ToString().TrimEnd();
             }
 
             var tierAProducts = await _posDbService.GetZeroCostProductsAsync();
@@ -5305,18 +5444,27 @@ namespace SmartSembakoAssistant.Services
                 return "Format: /stok_efektif <nama produk unit besar>";
             }
 
-            var (parent, parentError) = await TryResolveProductAsync(args, isMutation: false, actionLabel: "cek stok efektif");
-            if (parent == null || !string.IsNullOrWhiteSpace(parentError))
+            var (resolvedProduct, resolveError) = await TryResolveProductAsync(args, isMutation: false, actionLabel: "cek stok efektif");
+            if (resolvedProduct == null || !string.IsNullOrWhiteSpace(resolveError))
             {
-                return parentError ?? $"Produk \"{args}\" tidak ditemukan.";
+                return resolveError ?? $"Produk \"{args}\" tidak ditemukan.";
             }
 
-            var mapping = string.IsNullOrWhiteSpace(parent.Id)
+            var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            var mapping = string.IsNullOrWhiteSpace(resolvedProduct.Id)
                 ? null
-                : await _databaseService.GetConversionByParentIdAsync(parent.Id);
+                : FindMappingForProduct(mappings, resolvedProduct.Id);
             if (mapping == null || string.IsNullOrWhiteSpace(mapping.ChildProductId))
             {
-                return await BuildEffectiveStockMappingSuggestionAsync(parent, args);
+                return await BuildEffectiveStockMappingSuggestionAsync(resolvedProduct, args);
+            }
+
+            var parent = string.Equals(resolvedProduct.Id, mapping.ParentProductId, StringComparison.OrdinalIgnoreCase)
+                ? resolvedProduct
+                : await _posDbService.GetProductByIdAsync(mapping.ParentProductId);
+            if (parent == null)
+            {
+                return $"{IconWarning} Produk parent mapping tidak ditemukan di pos.db: {mapping.ParentProductName ?? mapping.ParentProductId}.";
             }
 
             var child = await _posDbService.GetProductByIdAsync(mapping.ChildProductId);
@@ -6103,21 +6251,457 @@ namespace SmartSembakoAssistant.Services
             }
 
             int days = int.TryParse(argument, out var parsed) ? parsed : 7;
+            days = Math.Clamp(days, 1, 90);
             var trend = await _posDbService.GetDailyTrendAsync(days);
             if (!trend.Any())
             {
                 return "Belum ada data tren harian.";
             }
 
+            DateTime currentStart = DateTime.Today.AddDays(-(days - 1));
+            DateTime previousStart = currentStart.AddDays(-days);
+            DateTime previousEnd = currentStart.AddDays(-1);
+            decimal totalRevenue = trend.Sum(item => item.Revenue);
+            decimal previousRevenue = await _posDbService.GetSalesRevenueAsync(previousStart, previousEnd);
+            decimal growthPct = CalculateGrowthPercent(totalRevenue, previousRevenue);
+            decimal average = trend.Count > 0 ? totalRevenue / trend.Count : 0;
+            var best = trend.OrderByDescending(item => item.Revenue).FirstOrDefault();
+            var worst = trend.OrderBy(item => item.Revenue).FirstOrDefault();
+
             var sb = new StringBuilder();
             sb.AppendLine($"{IconChart} TREN PENJUALAN {trend.Count} HARI");
             sb.AppendLine();
+            sb.AppendLine($"Rata-rata/hari: {FormatCurrency(average)}");
+            sb.AppendLine($"Tren: {BuildTrendIcon(growthPct)} {BuildTrendLabel(growthPct)} {FormatSignedPercent(growthPct)} vs {days} hari sebelumnya");
+            if (best != null)
+            {
+                sb.AppendLine($"Terbaik: {FormatShortDate(best.Date)} - {FormatCurrency(best.Revenue)}");
+            }
+            if (worst != null)
+            {
+                sb.AppendLine($"Terendah: {FormatShortDate(worst.Date)} - {FormatCurrency(worst.Revenue)}");
+            }
+            sb.AppendLine();
             foreach (var item in trend)
             {
-                sb.AppendLine($"{FormatShortDate(item.Date)} | {item.TransactionCount} trx | {FormatCurrency(item.Revenue)}");
+                string marker = item == best ? " terbaik" : item == worst ? " terendah" : string.Empty;
+                sb.AppendLine($"{FormatShortDate(item.Date)} | {item.TransactionCount} trx | {FormatCurrency(item.Revenue)} | {BuildRevenueVsAverageLabel(item.Revenue, average)}{marker}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine(BuildDailyTrendHint(days));
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string BuildDailyTrendHint(int days)
+        {
+            return days < 14
+                ? "Ketik /tren 14 atau /tren 30 untuk periode lebih panjang."
+                : days < 30
+                    ? "Ketik /tren 30 atau /tren 60 untuk periode lebih panjang."
+                    : days < 60
+                        ? "Ketik /tren 60 untuk periode lebih panjang."
+                        : "Ketik /laporan_bulanan untuk tren per bulan.";
+        }
+
+        private async Task<string> HandleTrendCommandAsync(string args)
+        {
+            string value = args.Trim().ToLowerInvariant();
+            if (value.Contains("minggu"))
+            {
+                return await HandleWeeklyReportAsync();
+            }
+
+            if (value.Contains("bulan"))
+            {
+                return await HandleMonthlyTrendAsync(value);
+            }
+
+            var match = Regex.Match(value, @"\d+");
+            return await HandleDailyTrendAsync(match.Success ? match.Value : "7");
+        }
+
+        private async Task<string> HandleWeeklyReportAsync()
+        {
+            return await BuildWeeklyReportAsync();
+        }
+
+        private async Task<string> BuildWeeklyReportAsync()
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var data = await _posDbService.GetWeeklySalesComparisonAsync();
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconChart} LAPORAN MINGGUAN");
+            sb.AppendLine();
+            sb.AppendLine($"Minggu ini : {FormatCurrency(data.ThisWeekRevenue)} | {data.ThisWeekTxCount} trx");
+            sb.AppendLine($"Minggu lalu: {FormatCurrency(data.LastWeekRevenue)} | {data.LastWeekTxCount} trx");
+            sb.AppendLine($"Growth     : {BuildTrendIcon(data.GrowthPct)} {FormatSignedPercent(data.GrowthPct)} ({data.TrendLabel})");
+            sb.AppendLine($"Profit     : {FormatCurrency(data.ThisWeekProfit)}");
+            if (data.TopProducts.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Top produk minggu ini:");
+                for (int i = 0; i < data.TopProducts.Count; i++)
+                {
+                    var item = data.TopProducts[i];
+                    sb.AppendLine($"{i + 1}. {FormatOptional(item.ProductName)} | {FormatDisplayQuantity(item.QuantitySold)} {GetUnitLabel(item.Unit)} | {FormatCurrency(item.Revenue)}");
+                }
             }
 
             return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleMonthlyTrendAsync(string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            int months = 3;
+            var match = Regex.Match(args ?? string.Empty, @"\d+");
+            if (match.Success && int.TryParse(match.Value, out var parsed))
+            {
+                months = parsed;
+            }
+            else if ((args ?? string.Empty).Contains("12", StringComparison.OrdinalIgnoreCase))
+            {
+                months = 12;
+            }
+
+            months = Math.Clamp(months, 1, 12);
+            var trend = await _posDbService.GetMonthlySalesTrendAsync(months);
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconChart} LAPORAN BULANAN {months} BULAN");
+            sb.AppendLine();
+            foreach (var item in trend)
+            {
+                sb.AppendLine($"{item.Label} | {FormatCurrency(item.Revenue)} | {item.TxCount} trx | {FormatMonthlyGrowth(item)}");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleProductTrendAsync(string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            if (string.IsNullOrWhiteSpace(args))
+            {
+                return $"{IconCross} Format salah.\nGunakan: /tren_produk <nama produk>\nContoh: /tren_produk kapal api";
+            }
+
+            var (product, error) = await TryResolveProductAsync(args, isMutation: false, actionLabel: "lihat tren produk");
+            if (product == null)
+            {
+                return error ?? "Produk tidak ditemukan.";
+            }
+
+            DateTime end = DateTime.Today;
+            DateTime start = end.AddDays(-29);
+            var trend = await _posDbService.GetProductDailySalesAsync(product.Id ?? string.Empty, start, end);
+            decimal totalQty = trend.Sum(item => item.QuantitySold);
+            decimal totalRevenue = trend.Sum(item => item.Revenue);
+            decimal last7Qty = trend.Where(item => item.Date >= end.AddDays(-6)).Sum(item => item.QuantitySold);
+            decimal prev7Qty = trend.Where(item => item.Date >= end.AddDays(-13) && item.Date <= end.AddDays(-7)).Sum(item => item.QuantitySold);
+            decimal growthPct = CalculateGrowthPercent(last7Qty, prev7Qty);
+            var peak = trend.OrderByDescending(item => item.QuantitySold).FirstOrDefault();
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconChart} TREN PRODUK - {FormatOptional(product.Name)}");
+            sb.AppendLine();
+            sb.AppendLine($"Periode: 30 hari terakhir");
+            sb.AppendLine($"Terjual: {FormatDisplayQuantity(totalQty)} {GetUnitLabel(product.Unit)}");
+            sb.AppendLine($"Omzet  : {FormatCurrency(totalRevenue)}");
+            sb.AppendLine($"Rata-rata: {FormatDisplayQuantity(totalQty / 30m)} {GetUnitLabel(product.Unit)}/hari");
+            sb.AppendLine($"Tren 7 hari: {BuildTrendIcon(growthPct)} {BuildTrendLabel(growthPct)} {FormatSignedPercent(growthPct)} vs 7 hari sebelumnya");
+            if (peak != null && peak.QuantitySold > 0)
+            {
+                sb.AppendLine($"Puncak: {FormatShortDate(peak.Date)} - {FormatDisplayQuantity(peak.QuantitySold)} {GetUnitLabel(product.Unit)}");
+            }
+
+            var activeDays = trend.Where(item => item.QuantitySold > 0).OrderByDescending(item => item.Date).Take(10).ToList();
+            if (activeDays.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Hari aktif terakhir:");
+                foreach (var item in activeDays)
+                {
+                    sb.AppendLine($"{FormatShortDate(item.Date)} | {FormatDisplayQuantity(item.QuantitySold)} {GetUnitLabel(product.Unit)} | {FormatCurrency(item.Revenue)}");
+                }
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleHourlySalesAsync(string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            DateTime date = ResolveHourlySalesDate(args);
+            var rows = await _posDbService.GetHourlySalesAsync(date);
+            var active = rows.Where(item => item.TxCount > 0 || item.Revenue > 0).ToList();
+            if (!active.Any())
+            {
+                if (string.IsNullOrWhiteSpace(args))
+                {
+                    var lastSale = await _posDbService.GetLastSalesSummaryBeforeAsync(date);
+                    if (lastSale.LastSaleDate.HasValue)
+                    {
+                        DateTime fallbackDate = lastSale.LastSaleDate.Value.Date;
+                        rows = await _posDbService.GetHourlySalesAsync(fallbackDate);
+                        active = rows.Where(item => item.TxCount > 0 || item.Revenue > 0).ToList();
+                        if (active.Any())
+                        {
+                            return BuildHourlySalesResponse(
+                                fallbackDate,
+                                active,
+                                $"Belum ada penjualan pada {FormatShortDate(date)}. Menampilkan jam sibuk terakhir yang ada data: {FormatShortDate(fallbackDate)}.");
+                        }
+                    }
+                }
+
+                return $"Belum ada penjualan pada {FormatShortDate(date)}.";
+            }
+
+            return BuildHourlySalesResponse(date, active);
+        }
+
+        private string BuildHourlySalesResponse(DateTime date, List<HourlySalesData> active, string? note = null)
+        {
+            var best = active.OrderByDescending(item => item.Revenue).First();
+            var quiet = active.OrderBy(item => item.Revenue).First();
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconChart} JAM SIBUK - {FormatShortDate(date)}");
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                sb.AppendLine(note);
+            }
+            sb.AppendLine();
+            sb.AppendLine($"Tersibuk: {best.HourLabel} | {best.TxCount} trx | {FormatCurrency(best.Revenue)}");
+            sb.AppendLine($"Tersepi : {quiet.HourLabel} | {quiet.TxCount} trx | {FormatCurrency(quiet.Revenue)}");
+            sb.AppendLine();
+            foreach (var item in active.OrderByDescending(item => item.Revenue).Take(10))
+            {
+                sb.AppendLine($"{item.HourLabel} | {item.TxCount} trx | {FormatCurrency(item.Revenue)}");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleForecastAsync()
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            DateTime today = DateTime.Today;
+            DateTime monthStart = GetMonthStart(today);
+            int elapsedDays = Math.Max(1, (today - monthStart).Days + 1);
+            int daysInMonth = DateTime.DaysInMonth(today.Year, today.Month);
+            decimal revenueMtd = await _posDbService.GetSalesRevenueAsync(monthStart, today);
+            decimal estimate = revenueMtd / elapsedDays * daysInMonth;
+
+            return $"{IconChart} FORECAST BULAN INI\n\n" +
+                   $"Omzet MTD: {FormatCurrency(revenueMtd)}\n" +
+                   $"Hari berjalan: {elapsedDays}/{daysInMonth}\n" +
+                   $"Estimasi kasar akhir bulan: {FormatCurrency(estimate)}\n\n" +
+                   "Formula: omzet MTD / hari berjalan x jumlah hari bulan ini.";
+        }
+
+        private async Task<string> HandleAIInsightAsync(AutomationExecutionContext context)
+        {
+            string key = $"{context.Identity.Channel}:{context.Identity.SenderId}";
+            DateTime? lastInsightAt = null;
+            if (_lastAIInsightBySender.TryGetValue(key, out var lastAt))
+            {
+                lastInsightAt = lastAt;
+            }
+            else if (DateTime.TryParse(_databaseService.GetRuntimeState(BuildAIInsightRuntimeStateKey(key)), out var storedLastAt))
+            {
+                lastInsightAt = storedLastAt;
+                _lastAIInsightBySender[key] = storedLastAt;
+            }
+
+            if (lastInsightAt.HasValue)
+            {
+                var remaining = TimeSpan.FromMinutes(30) - (DateTime.Now - lastInsightAt.Value);
+                if (remaining > TimeSpan.Zero)
+                {
+                    return $"Analisa AI masih cooldown. Coba lagi sekitar {Math.Ceiling(remaining.TotalMinutes)} menit.";
+                }
+            }
+
+            DateTime now = DateTime.Now;
+            _lastAIInsightBySender[key] = now;
+            await _databaseService.SetRuntimeStateAsync(BuildAIInsightRuntimeStateKey(key), now.ToString("o"));
+
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var weeklyTask = _posDbService.GetWeeklySalesComparisonAsync();
+            var monthlyTask = _posDbService.GetMonthlySalesTrendAsync(3);
+            var anomalyTask = BuildAnomalyInsightAsync();
+            await Task.WhenAll(weeklyTask, monthlyTask, anomalyTask);
+
+            var weekly = await weeklyTask;
+            var monthly = await monthlyTask;
+            string anomaly = await anomalyTask;
+            var currentMonth = monthly.LastOrDefault();
+            var topProduct = weekly.TopProducts.FirstOrDefault();
+
+            string aiNarrative = string.Empty;
+            if (_configService.Config?.Automation?.EnableAIReportNarrative == true)
+            {
+                aiNarrative = await _groqService.GenerateTrendAnalysisAsync(new TrendAnalysisPromptData
+                {
+                    WeeklyRevenue = weekly.ThisWeekRevenue,
+                    WeeklyGrowthPct = weekly.GrowthPct,
+                    WeeklyTrendLabel = weekly.TrendLabel,
+                    MonthlyRevenue = currentMonth?.Revenue ?? 0,
+                    MonthlyGrowthPct = currentMonth?.GrowthVsPrevMonth ?? 0,
+                    MonthlyHasGrowthBaseline = currentMonth?.HasGrowthBaseline == true,
+                    TopProductName = topProduct?.ProductName,
+                    TopProductRevenue = topProduct?.Revenue ?? 0,
+                    AnomalyNote = string.IsNullOrWhiteSpace(anomaly) ? null : anomaly
+                });
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconRobot} ANALISA AI");
+            sb.AppendLine();
+            if (!string.IsNullOrWhiteSpace(aiNarrative))
+            {
+                sb.AppendLine(aiNarrative.Trim());
+            }
+            else
+            {
+                sb.AppendLine("Analisa deterministik dari data toko:");
+                sb.AppendLine($"- Minggu ini {weekly.TrendLabel.ToLowerInvariant()} {FormatSignedPercent(weekly.GrowthPct)} vs minggu lalu.");
+                if (currentMonth != null)
+                {
+                    sb.AppendLine($"- Bulan berjalan: {FormatCurrency(currentMonth.Revenue)} ({FormatMonthlyGrowth(currentMonth)} vs bulan sebelumnya).");
+                }
+                if (!string.IsNullOrWhiteSpace(anomaly))
+                {
+                    sb.AppendLine($"- {anomaly}");
+                }
+                sb.AppendLine("- Rekomendasi: cek /tren, /laporan_mingguan, /forecast, dan top produk sebelum keputusan restock besar.");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string BuildAIInsightRuntimeStateKey(string key)
+        {
+            string safeKey = Regex.Replace(key, @"[^A-Za-z0-9_.:-]", "_");
+            return $"automation.ai_insight.last:{safeKey}";
+        }
+
+        private static decimal CalculateGrowthPercent(decimal current, decimal previous)
+        {
+            if (previous == 0)
+            {
+                return current > 0 ? 100 : 0;
+            }
+
+            return (current - previous) / previous * 100;
+        }
+
+        private static string BuildTrendLabel(decimal growthPct)
+        {
+            if (growthPct > 2)
+            {
+                return "NAIK";
+            }
+
+            if (growthPct < -2)
+            {
+                return "TURUN";
+            }
+
+            return "STABIL";
+        }
+
+        private static string BuildTrendIcon(decimal growthPct)
+        {
+            if (growthPct > 2)
+            {
+                return IconUp;
+            }
+
+            if (growthPct < -2)
+            {
+                return IconDown;
+            }
+
+            return IconRight;
+        }
+
+        private static string FormatMonthlyGrowth(MonthlySalesTrend item)
+        {
+            return item.HasGrowthBaseline
+                ? $"{BuildTrendIcon(item.GrowthVsPrevMonth)} {FormatSignedPercent(item.GrowthVsPrevMonth)}"
+                : "N/A";
+        }
+
+        private static string FormatSignedPercent(decimal value)
+        {
+            return $"{value:+0.##;-0.##;0}%";
+        }
+
+        private static string BuildRevenueVsAverageLabel(decimal revenue, decimal average)
+        {
+            if (average <= 0)
+            {
+                return "belum ada rata-rata";
+            }
+
+            decimal pct = CalculateGrowthPercent(revenue, average);
+            if (pct > 10)
+            {
+                return $"di atas rata-rata {FormatSignedPercent(pct)}";
+            }
+
+            if (pct < -10)
+            {
+                return $"di bawah rata-rata {FormatSignedPercent(pct)}";
+            }
+
+            return "sekitar rata-rata";
+        }
+
+        private static DateTime ResolveHourlySalesDate(string args)
+        {
+            string value = (args ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(value) ||
+                value.Equals("hari ini", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("today", StringComparison.OrdinalIgnoreCase))
+            {
+                return DateTime.Today;
+            }
+
+            if (value.Equals("kemarin", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("yesterday", StringComparison.OrdinalIgnoreCase))
+            {
+                return DateTime.Today.AddDays(-1);
+            }
+
+            return ParseFlexibleDate(value) ?? DateTime.Today;
         }
 
         private async Task<string> HandleInventoryHistoryAsync(string args)
@@ -6311,6 +6895,11 @@ namespace SmartSembakoAssistant.Services
                 return null;
             }
 
+            if (LooksLikeStockLookupMessage(text))
+            {
+                return null;
+            }
+
             if (TryParseNaturalShadowMappingIntent(text, out var shadowIntent))
             {
                 shadowIntent.OriginalMessage = text.Trim();
@@ -6324,6 +6913,21 @@ namespace SmartSembakoAssistant.Services
             }
 
             return null;
+        }
+
+        private static bool LooksLikeStockLookupMessage(string text)
+        {
+            string normalized = NormalizeText(text);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return false;
+            }
+
+            return normalized.StartsWith("stok ", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.StartsWith("stock ", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.StartsWith("cek stok ", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains(" stok ", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains(" stock ", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryParseNaturalShadowMappingIntent(string text, out ShadowMappingIntent intent)
@@ -6635,6 +7239,7 @@ namespace SmartSembakoAssistant.Services
                        "Pilih kategori bantuan di bawah, atau ketik:\n" +
                        "- /help lengkap\n" +
                        "- /help stok\n" +
+                       "- /help tren\n" +
                        "- /help dual_stock\n" +
                        "- /help ocr\n" +
                        "- /help pelanggan\n" +
@@ -6652,8 +7257,12 @@ namespace SmartSembakoAssistant.Services
                     "Mulai cepat:\n/stok <nama produk>\n/laporan\n/piutang\n/menu",
                 "laporan" =>
                     isOwner
-                        ? "Laporan & analisa:\n/laporan\n/laporan_periode <periode>\n/statistik\n/analisa\n/rekomendasi_restock"
+                        ? "Laporan & analisa:\n/laporan\n/laporan_periode <periode>\n/tren [7|14|30]\n/laporan_mingguan\n/laporan_bulanan [3|6|12]\n/tren_produk <produk>\n/jam_sibuk [tanggal]\n/forecast\n/analisa_ai\n/statistik\n/analisa\n/rekomendasi_restock"
                         : "Laporan kasir:\n/laporan untuk ringkasan operasional yang diizinkan.",
+                "tren" =>
+                    isOwner
+                        ? "Tren & analytics:\n/tren [7|14|30]\n/laporan_mingguan\n/laporan_bulanan [3|6|12]\n/tren_produk <produk>\n/jam_sibuk [hari ini|kemarin|tanggal]\n/forecast\n/analisa_ai"
+                        : "Tren hanya tersedia untuk owner.",
                 "stok" =>
                     "Stok & inventory:\n/stok <nama produk>\n/inventory <produk> <stok_target>\n/stok_kategori <nama kategori>\n/notifikasi_stok",
                 "ocr" =>
@@ -6715,6 +7324,13 @@ namespace SmartSembakoAssistant.Services
             if (isOwner)
             {
                 sb.AppendLine("/laporan_periode <periode> - laporan penjualan fleksibel");
+                sb.AppendLine("/tren [7|14|30] - tren penjualan harian");
+                sb.AppendLine("/laporan_mingguan - minggu ini vs minggu lalu");
+                sb.AppendLine("/laporan_bulanan [3|6|12] - tren bulanan");
+                sb.AppendLine("/tren_produk <produk> - tren penjualan produk");
+                sb.AppendLine("/jam_sibuk [tanggal] - distribusi sales per jam");
+                sb.AppendLine("/forecast - estimasi kasar omzet akhir bulan");
+                sb.AppendLine("/analisa_ai - analisa tren dengan cooldown");
                 sb.AppendLine("/statistik - insight bisnis bulanan");
                 sb.AppendLine("/analisa - analisa bisnis");
                 sb.AppendLine("/notifikasi_stok - stok kritis");
@@ -7411,6 +8027,7 @@ namespace SmartSembakoAssistant.Services
                 "top_supplier" => await HandleTopSupplierAsync(),
                 "cashier_performance" => await HandleCashierReportAsync(),
                 "daily_trend" => await HandleDailyTrendAsync(intent.Argument),
+                "hourly_sales" => await HandleHourlySalesAsync(intent.Argument ?? string.Empty),
                 "export_receivables" => await HandleExportReceivablesAsync(context),
                 "export_bundle" => await HandleExportBundleAsync(context),
                 "confirm_export" => await HandlePendingExportConfirmationAsync(context),
@@ -7705,6 +8322,17 @@ namespace SmartSembakoAssistant.Services
                 {
                     Kind = "export_sales",
                     Argument = TryExtractSalesPeriodArgument(userMessage) ?? "today",
+                    OwnerOnly = true
+                };
+            }
+
+            if (ContainsAny(normalized, "jam sibuk", "waktu sibuk", "peak hour"))
+            {
+                string? argument = ExtractKeywordAfterAny(userMessage, "jam sibuk", "waktu sibuk", "peak hour");
+                return new DeterministicIntent
+                {
+                    Kind = "hourly_sales",
+                    Argument = argument,
                     OwnerOnly = true
                 };
             }
@@ -10743,6 +11371,79 @@ namespace SmartSembakoAssistant.Services
                 : receipt.SupplierName;
         }
 
+        private static string GetReceiptSupplierKey(ParsedReceipt receipt)
+        {
+            return ConfigService.NormalizeOcrSupplierKey(
+                GetReceiptSupplierName(receipt) ?? receipt.VendorType);
+        }
+
+        private static bool IsTrustedOcrMapping(OcrProductMapping mapping)
+        {
+            return string.Equals(mapping.TrustLevel, "trusted", StringComparison.OrdinalIgnoreCase) ||
+                   string.IsNullOrWhiteSpace(mapping.TrustLevel);
+        }
+
+        private static bool IsBlockedOcrMapping(OcrProductMapping mapping)
+        {
+            return string.Equals(mapping.TrustLevel, "blocked", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool MappingSupplierMatches(OcrProductMapping mapping, string supplierKey)
+        {
+            string mappingSupplier = ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey);
+            if (string.Equals(mappingSupplier, supplierKey, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Legacy/global mappings are intentionally not trusted for WINGS receipts.
+            return string.Equals(mappingSupplier, "GLOBAL", StringComparison.OrdinalIgnoreCase) &&
+                   !string.Equals(supplierKey, "WINGS", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool InvoiceNameMatchesExactly(string rawName, string originalRawName, OcrProductMapping mapping)
+        {
+            string mappingName = ConfigService.NormalizeOcrName(mapping.InvoiceName);
+            return !string.IsNullOrWhiteSpace(mappingName) &&
+                   (string.Equals(ConfigService.NormalizeOcrName(rawName), mappingName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(ConfigService.NormalizeOcrName(originalRawName), mappingName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool CanUseAliasAutomatically(ProductAliasEntry alias, string supplierKey, bool requiresExplicitMapping)
+        {
+            if (requiresExplicitMapping || string.Equals(supplierKey, "WINGS", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return string.Equals(alias.Source, "config-mapping", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(alias.Source, "manual", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasLikelyBrandMismatch(string rawName, string? productName)
+        {
+            string rawBrand = FirstMeaningfulToken(rawName);
+            string productBrand = FirstMeaningfulToken(productName);
+            return !string.IsNullOrWhiteSpace(rawBrand) &&
+                   !string.IsNullOrWhiteSpace(productBrand) &&
+                   !string.Equals(rawBrand, productBrand, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string FirstMeaningfulToken(string? value)
+        {
+            foreach (string token in ConfigService.NormalizeOcrName(value).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (token.Length <= 1 || decimal.TryParse(token, out _))
+                {
+                    continue;
+                }
+
+                return token;
+            }
+
+            return string.Empty;
+        }
+
         private static int GetOcrQuantitySafetyThreshold(string? vendorType)
         {
             return vendorType?.Trim().ToUpperInvariant() switch
@@ -10899,13 +11600,34 @@ namespace SmartSembakoAssistant.Services
                 Product? mappedProduct = null;
                 bool shouldLearnAlias = false;
                 string aliasSource = "ocr";
+                string mappingTrustLevel = "trusted";
                 bool requiresExplicitMapping = RequiresExplicitOcrMapping(rawName, parsedUnit);
+                string supplierKey = GetReceiptSupplierKey(receipt);
+
+                var blockedMap = settings.ProductMappings.FirstOrDefault(map =>
+                    IsBlockedOcrMapping(map) &&
+                    MappingSupplierMatches(map, supplierKey) &&
+                    InvoiceNameMatchesExactly(rawName, originalRawName, map));
+                if (blockedMap != null)
+                {
+                    outcome.ReviewItems.Add(BuildOcrReviewQueueItem(
+                        message,
+                        receipt,
+                        rawName,
+                        quantity,
+                        parsedUnit,
+                        parsedPrice,
+                        parsedTotal,
+                        blockedMap.DatabaseProductName,
+                        $"Mapping OCR diblokir: pernah salah ke '{blockedMap.DatabaseProductName}'. {blockedMap.Note}",
+                        item.IsiPerBox));
+                    continue;
+                }
 
                 var configuredMap = settings.ProductMappings.FirstOrDefault(map =>
-                    rawName.Contains(map.InvoiceName, StringComparison.OrdinalIgnoreCase) ||
-                    map.InvoiceName.Contains(rawName, StringComparison.OrdinalIgnoreCase) ||
-                    originalRawName.Contains(map.InvoiceName, StringComparison.OrdinalIgnoreCase) ||
-                    map.InvoiceName.Contains(originalRawName, StringComparison.OrdinalIgnoreCase));
+                    IsTrustedOcrMapping(map) &&
+                    MappingSupplierMatches(map, supplierKey) &&
+                    InvoiceNameMatchesExactly(rawName, originalRawName, map));
 
                 if (configuredMap != null)
                 {
@@ -10915,6 +11637,7 @@ namespace SmartSembakoAssistant.Services
                         mappedProduct = configuredProduct;
                         shouldLearnAlias = mappedProduct != null;
                         aliasSource = "config-mapping";
+                        mappingTrustLevel = configuredMap.TrustLevel;
                     }
                     else
                     {
@@ -10933,13 +11656,14 @@ namespace SmartSembakoAssistant.Services
                         alias = await _databaseService.GetProductAliasAsync(originalRawName);
                     }
 
-                    if (alias != null && !requiresExplicitMapping)
+                    if (alias != null && CanUseAliasAutomatically(alias, supplierKey, requiresExplicitMapping))
                     {
                         var aliasProduct = await _posDbService!.GetProductByIdAsync(alias.ProductId);
                         if (IsReceiptUnitCompatible(parsedUnit, aliasProduct))
                         {
                             mappedProduct = aliasProduct;
                             aliasSource = alias.Source ?? "product-alias";
+                            mappingTrustLevel = "trusted";
                         }
                         else
                         {
@@ -10950,9 +11674,19 @@ namespace SmartSembakoAssistant.Services
                     }
                     else if (alias != null)
                     {
-                        await _loggingService.LogInfoAsync(
-                            $"[OCR] Alias '{rawName}' diabaikan karena produk kemasan perlu mapping OCR eksplisit.",
-                            "OCR");
+                        var aliasProduct = await _posDbService!.GetProductByIdAsync(alias.ProductId);
+                        outcome.ReviewItems.Add(BuildOcrReviewQueueItem(
+                            message,
+                            receipt,
+                            rawName,
+                            quantity,
+                            parsedUnit,
+                            parsedPrice,
+                            parsedTotal,
+                            aliasProduct?.Name,
+                            $"Alias runtime source '{alias.Source ?? "product-alias"}' belum trusted untuk auto-restock. Review manual di UI mapping.",
+                            item.IsiPerBox));
+                        continue;
                     }
 
                     if (mappedProduct == null)
@@ -10963,14 +11697,15 @@ namespace SmartSembakoAssistant.Services
                         // OCR adds unit-aware score adjustments so bulk units prefer parent products and pcs/ecer units prefer child products.
                         bool strongMatch = resolved.BestMatch != null &&
                                            !resolved.IsAmbiguous &&
-                                           (bestCandidate?.IsExactMatch == true ||
-                                            (!requiresExplicitMapping && (bestCandidate?.Score ?? 0) >= 45));
+                                           bestCandidate?.IsExactMatch == true &&
+                                           !HasLikelyBrandMismatch(rawName, resolved.BestMatch?.Name);
 
                         if (strongMatch)
                         {
                             mappedProduct = resolved.BestMatch;
-                            shouldLearnAlias = true;
+                            shouldLearnAlias = false;
                             aliasSource = "auto-match";
+                            mappingTrustLevel = "trusted";
                         }
                         else
                         {
@@ -10985,6 +11720,8 @@ namespace SmartSembakoAssistant.Services
                                 BuildCandidateSummary(resolved.Candidates),
                                 requiresExplicitMapping
                                     ? "Produk kemasan perlu mapping OCR manual supaya parent/child tidak salah."
+                                    : HasLikelyBrandMismatch(rawName, resolved.BestMatch?.Name)
+                                        ? $"Brand OCR tidak cocok dengan kandidat '{resolved.BestMatch?.Name}'. Review manual."
                                     : resolved.Reason ?? "Produk belum bisa dicocokkan otomatis.",
                                 item.IsiPerBox));
                             continue;
@@ -11042,6 +11779,8 @@ namespace SmartSembakoAssistant.Services
                     CurrentStock = mappedProduct.Stock,
                     Unit = mappedProduct.Unit,
                     IsiPerBox = item.IsiPerBox,
+                    MappingSource = aliasSource,
+                    MappingTrustLevel = mappingTrustLevel,
                     RawProductNames = new List<string> { rawName, originalRawName }
                         .Where(name => !string.IsNullOrWhiteSpace(name))
                         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -11062,6 +11801,8 @@ namespace SmartSembakoAssistant.Services
                     IsiPerBox = group
                         .Select(item => item.IsiPerBox)
                         .FirstOrDefault(value => value.GetValueOrDefault() > 0),
+                    MappingSource = group.Last().MappingSource,
+                    MappingTrustLevel = group.Last().MappingTrustLevel,
                     RawProductNames = group
                         .SelectMany(item => item.RawProductNames ?? Enumerable.Empty<string>())
                         .Where(name => !string.IsNullOrWhiteSpace(name))
@@ -11198,7 +11939,13 @@ namespace SmartSembakoAssistant.Services
                 sb.AppendLine("Item valid:");
                 foreach (var item in outcome.ValidItems.Take(6))
                 {
-                    sb.AppendLine($"- {item.ProductName} | {FormatStockValue(item.Quantity)} {GetUnitLabel(item.Unit)} | {FormatCurrency(item.Price ?? 0)}");
+                    string rawSource = item.RawProductNames?.FirstOrDefault(name =>
+                        !string.IsNullOrWhiteSpace(name) &&
+                        !string.Equals(name, item.ProductName, StringComparison.OrdinalIgnoreCase)) ?? item.ProductName;
+                    string sourceLabel = string.IsNullOrWhiteSpace(item.MappingSource)
+                        ? "mapping"
+                        : item.MappingSource;
+                    sb.AppendLine($"- {rawSource} -> {item.ProductName} | {FormatStockValue(item.Quantity)} {GetUnitLabel(item.Unit)} | {FormatCurrency(item.Price ?? 0)} | {sourceLabel}");
                 }
             }
 
@@ -11300,6 +12047,39 @@ namespace SmartSembakoAssistant.Services
             if (totalReceivable > 0)
             {
                 sb.AppendLine($"Total piutang pelanggan (belum lunas): {FormatCurrency(totalReceivable)}");
+            }
+
+            if (isOwner)
+            {
+                try
+                {
+                    var dailyTrendTask = _posDbService.GetDailyTrendAsync(7);
+                    var previous7RevenueTask = _posDbService.GetSalesRevenueAsync(DateTime.Today.AddDays(-14), DateTime.Today.AddDays(-8));
+                    var weeklyComparisonTask = _posDbService.GetWeeklySalesComparisonAsync();
+                    await Task.WhenAll(dailyTrendTask, previous7RevenueTask, weeklyComparisonTask);
+
+                    var dailyTrend = await dailyTrendTask;
+                    decimal current7Revenue = dailyTrend.Sum(item => item.Revenue);
+                    decimal previous7Revenue = await previous7RevenueTask;
+                    decimal average7 = dailyTrend.Any() ? current7Revenue / dailyTrend.Count : 0;
+                    decimal trend7Pct = CalculateGrowthPercent(current7Revenue, previous7Revenue);
+                    decimal ownerTodayTrendRevenue = dailyTrend.LastOrDefault(item => item.Date.Date == DateTime.Today)?.Revenue ?? 0;
+                    decimal ownerYesterdayTrendRevenue = dailyTrend.LastOrDefault(item => item.Date.Date == DateTime.Today.AddDays(-1))?.Revenue ?? 0;
+                    decimal todayVsYesterdayPct = CalculateGrowthPercent(ownerTodayTrendRevenue, ownerYesterdayTrendRevenue);
+                    var weekly = await weeklyComparisonTask;
+
+                    sb.AppendLine("Tren penjualan ringkas:");
+                    sb.AppendLine($"- Rata-rata 7 hari: {FormatCurrency(average7)}/hari");
+                    sb.AppendLine($"- Tren 7 hari: {BuildTrendIcon(trend7Pct)} {BuildTrendLabel(trend7Pct)} {FormatSignedPercent(trend7Pct)} vs 7 hari sebelumnya");
+                    sb.AppendLine($"- Hari ini vs kemarin: {BuildTrendIcon(todayVsYesterdayPct)} {FormatSignedPercent(todayVsYesterdayPct)}");
+                    sb.AppendLine($"- Minggu ini: {FormatCurrency(weekly.ThisWeekRevenue)} ({BuildTrendIcon(weekly.GrowthPct)} {FormatSignedPercent(weekly.GrowthPct)} vs minggu lalu)");
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogWarningAsync(
+                        $"Gagal menambahkan konteks tren AI chat: {ex.Message}",
+                        "AI");
+                }
             }
 
             if (intent?.Kind == "customers")
@@ -13080,13 +13860,48 @@ namespace SmartSembakoAssistant.Services
 
             var revenue = await _posDbService.GetTodayRevenueAsync();
             var profit = await _posDbService.GetTodayProfitAsync();
+            int transactionCount = await _posDbService.GetSalesTransactionCountAsync(DateTime.Today, DateTime.Today);
+            decimal yesterdayRevenue = await _posDbService.GetSalesRevenueAsync(DateTime.Today.AddDays(-1), DateTime.Today.AddDays(-1));
+            decimal previous7Revenue = await _posDbService.GetSalesRevenueAsync(DateTime.Today.AddDays(-7), DateTime.Today.AddDays(-1));
+            decimal average7Days = previous7Revenue / 7m;
+            decimal previous14Revenue = await _posDbService.GetSalesRevenueAsync(DateTime.Today.AddDays(-14), DateTime.Today.AddDays(-8));
+            decimal trendGrowth = CalculateGrowthPercent(previous7Revenue, previous14Revenue);
+            decimal marginPercent = revenue > 0 ? profit / revenue * 100 : 0;
+            decimal avgTransaction = transactionCount > 0 ? revenue / transactionCount : 0;
+            var topProducts = await _posDbService.GetTopSellingProductsAsync(DateTime.Today, DateTime.Today, 3);
+            string anomalyNote = await BuildAnomalyInsightAsync();
             var lowStock = await _posDbService.GetLowStockProductsAsync(10);
             var lowStockLines = await BuildDualThresholdLowStockLinesAsync(lowStock.Take(10).ToList());
 
             var sb = new StringBuilder();
-            sb.AppendLine($"Daily summary {DateTime.Now:dd/MM/yyyy}");
-            sb.AppendLine($"Omzet: {FormatCurrency(revenue)}");
-            sb.AppendLine($"Profit: {FormatCurrency(profit)}");
+            sb.AppendLine($"{IconChart} RINGKASAN HARIAN - {DateTime.Now:dd/MM/yyyy}");
+            sb.AppendLine();
+            sb.AppendLine($"{IconMoney} Omzet    : {FormatCurrency(revenue)} ({BuildTrendIcon(CalculateGrowthPercent(revenue, yesterdayRevenue))} {FormatSignedPercent(CalculateGrowthPercent(revenue, yesterdayRevenue))} vs kemarin {FormatCurrency(yesterdayRevenue)})");
+            sb.AppendLine($"{IconProfit} Profit   : {FormatCurrency(profit)} (margin {marginPercent:0.#}%)");
+            sb.AppendLine($"{IconReceipt} Transaksi: {transactionCount} trx | rata-rata {FormatCurrency(avgTransaction)}/trx");
+            sb.AppendLine();
+            sb.AppendLine("7 Hari Terakhir:");
+            sb.AppendLine($"  Rata-rata : {FormatCurrency(average7Days)}/hari");
+            sb.AppendLine($"  Tren      : {BuildTrendIcon(trendGrowth)} {BuildTrendLabel(trendGrowth)} {FormatSignedPercent(trendGrowth)} vs 7 hari sebelumnya");
+
+            if (topProducts.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("Top 3 Produk Hari Ini:");
+                for (int i = 0; i < topProducts.Count; i++)
+                {
+                    var item = topProducts[i];
+                    sb.AppendLine($"  {i + 1}. {FormatOptional(item.ProductName)} | {FormatDisplayQuantity(item.QuantitySold)} {GetUnitLabel(item.Unit)} | {FormatCurrency(item.Revenue)}");
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(anomalyNote))
+            {
+                sb.AppendLine();
+                sb.AppendLine(anomalyNote);
+            }
+
+            sb.AppendLine();
             sb.AppendLine($"Stok rendah: {lowStock.Count} produk");
             if (lowStockLines.Any())
             {
@@ -13251,6 +14066,103 @@ namespace SmartSembakoAssistant.Services
                     UserRole = "System",
                     Status = "queued",
                     Details = $"Broadcast queued to {outputs.Count} owner recipient(s)."
+                });
+            }
+
+            return outputs;
+        }
+
+        private List<OutboundMessage> BuildDailySummaryBroadcasts(string text, string triggerType)
+        {
+            var automation = _configService.Config?.Automation;
+            return BuildConfigurableOwnerBroadcasts(
+                text,
+                triggerType,
+                automation?.EnableTelegramDailySummaryAlerts != false,
+                automation?.EnableWhatsAppCloudDailySummaryAlerts == true,
+                automation?.EnableBaileysDailySummaryAlerts == true,
+                "Daily summary");
+        }
+
+        private List<OutboundMessage> BuildWeeklyReportBroadcasts(string text, string triggerType)
+        {
+            var automation = _configService.Config?.Automation;
+            return BuildConfigurableOwnerBroadcasts(
+                text,
+                triggerType,
+                automation?.EnableTelegramWeeklyReportAlerts != false,
+                automation?.EnableWhatsAppCloudWeeklyReportAlerts == true,
+                automation?.EnableBaileysWeeklyReportAlerts == true,
+                "Weekly report");
+        }
+
+        private List<OutboundMessage> BuildConfigurableOwnerBroadcasts(
+            string text,
+            string triggerType,
+            bool enableTelegram,
+            bool enableWhatsAppCloud,
+            bool enableBaileys,
+            string detailLabel)
+        {
+            var outputs = new List<OutboundMessage>();
+            string correlationId = Guid.NewGuid().ToString("N");
+
+            if (enableTelegram)
+            {
+                var telegramOwners = _configService.Config?.Telegram?.OwnerChatIds ?? new List<long>();
+                foreach (var ownerId in telegramOwners)
+                {
+                    outputs.Add(new OutboundMessage
+                    {
+                        Channel = ChannelType.Telegram,
+                        RecipientId = ownerId.ToString(CultureInfo.InvariantCulture),
+                        Text = text,
+                        CorrelationId = correlationId,
+                        OutboundSourceType = "scheduled_alert"
+                    });
+                }
+            }
+
+            if (enableWhatsAppCloud && IsWhatsAppCloudOutboundConfigured())
+            {
+                var waOwners = _configService.Config?.WhatsApp?.OwnerNumbers ?? new List<string>();
+                foreach (var number in waOwners)
+                {
+                    var templateOutbound = CreateWhatsAppTemplateOutbound(number, text, correlationId, triggerType);
+                    if (templateOutbound != null)
+                    {
+                        outputs.Add(templateOutbound);
+                    }
+                }
+            }
+
+            if (enableBaileys && IsBaileysTransportConfigured())
+            {
+                var baileysOwners = _configService.Config?.Baileys?.OwnerNumbers ?? new List<string>();
+                foreach (var number in baileysOwners)
+                {
+                    outputs.Add(new OutboundMessage
+                    {
+                        Channel = ChannelType.Baileys,
+                        RecipientId = NormalizeWhatsAppNumber(number),
+                        Text = text,
+                        CorrelationId = correlationId,
+                        OutboundSourceType = "scheduled_alert"
+                    });
+                }
+            }
+
+            if (outputs.Any())
+            {
+                _ = _databaseService.AddAutomationExecutionAsync(new AutomationExecutionRecord
+                {
+                    CorrelationId = correlationId,
+                    TriggerType = triggerType,
+                    Channel = ChannelType.System.ToString(),
+                    SenderId = "system",
+                    UserRole = "System",
+                    Status = "queued",
+                    Details = $"{detailLabel} queued to {outputs.Count} recipient(s)."
                 });
             }
 
@@ -14882,6 +15794,11 @@ namespace SmartSembakoAssistant.Services
             if (DateTime.TryParse(_databaseService.GetRuntimeState(StateLastDailySummaryDate), out var dailySummaryDate))
             {
                 _lastDailySummaryDate = dailySummaryDate.Date;
+            }
+
+            if (DateTime.TryParse(_databaseService.GetRuntimeState(StateLastWeeklyReportDate), out var weeklyReportDate))
+            {
+                _lastWeeklyReportDate = weeklyReportDate.Date;
             }
 
             if (DateTime.TryParse(_databaseService.GetRuntimeState(StateLastLowStockAlertDate), out var lowStockAlertDate))

@@ -417,6 +417,18 @@
 
                     <TextBlock Text="Daily Summary Time (HH:mm)" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <TextBox x:Name="TxtDailySummaryTime" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+                    <TextBlock Text="Daily summary channels" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <CheckBox x:Name="ChkEnableTelegramDailySummaryAlerts" Content="Telegram" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="ChkEnableWhatsAppCloudDailySummaryAlerts" Content="WhatsApp Cloud API" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="ChkEnableBaileysDailySummaryAlerts" Content="WhatsApp Baileys" Margin="0,0,0,10"/>
+                    <CheckBox x:Name="ChkEnableWeeklyReport" Content="Enable weekly report (Monday)" Margin="0,0,0,6"/>
+                    <TextBlock Text="Weekly Report Time (HH:mm)" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <TextBox x:Name="TxtWeeklyReportTime" Style="{StaticResource InputStyle}" Margin="0,0,0,6"/>
+                    <TextBlock Text="Weekly report channels" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
+                    <CheckBox x:Name="ChkEnableTelegramWeeklyReportAlerts" Content="Telegram" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="ChkEnableWhatsAppCloudWeeklyReportAlerts" Content="WhatsApp Cloud API" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="ChkEnableBaileysWeeklyReportAlerts" Content="WhatsApp Baileys" Margin="0,0,0,10"/>
+                    <CheckBox x:Name="ChkEnableAIReportNarrative" Content="Enable AI report narrative" Margin="0,0,0,10"/>
 
                     <TextBlock Text="Default Templates" FontSize="11" Margin="0,0,0,5" Foreground="#374151"/>
                     <TextBox x:Name="TxtAutomationTemplates" Style="{StaticResource InputStyle}" IsReadOnly="True" AcceptsReturn="True" Height="110" TextWrapping="Wrap"/>
@@ -511,19 +523,34 @@
                     <TextBlock Style="{StaticResource HelpTextStyle}" Text="Parsers aktif saat ini: AI parser + fallback parser lokal. Mapping produk dipakai sebelum restock dibuat."/>
 
                     <TextBlock Text="Pemetaan Nama Produk (Faktur ke Database)" FontSize="12" FontWeight="SemiBold" Margin="0,14,0,6" Foreground="#374151"/>
-                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Setup dulu di sini sebelum OCR dijalankan. Kolom kiri = nama di faktur/struk supplier. Kolom kanan = nama produk di database Aronium."/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Registry gabungan dari mapping JSON dan alias runtime. Trusted boleh auto-valid, candidate wajib review, blocked tidak boleh dipakai ulang."/>
 
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtMappingInvoiceName" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
-                        <TextBox x:Name="TxtMappingDbName" Grid.Column="1" Style="{StaticResource InputStyle}" Margin="0,0,6,0" IsReadOnly="True"/>
-                        <Button x:Name="BtnSearchDbProduct" Grid.Column="2" Content="Cari" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnSearchDbProduct_Click" ToolTip="Cari produk di database Aronium"/>
-                        <Button x:Name="BtnAddMapping" Grid.Column="3" Content="+ Tambah" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnAddMapping_Click"/>
+                        <ComboBox x:Name="CmbMappingSupplier" Grid.Column="0" Style="{StaticResource ComboStyle}" Margin="0,0,6,0" SelectedIndex="0">
+                            <ComboBoxItem Content="GLOBAL"/>
+                            <ComboBoxItem Content="WINGS"/>
+                            <ComboBoxItem Content="FASTRATA"/>
+                            <ComboBoxItem Content="TANI_MAKMUR"/>
+                        </ComboBox>
+                        <TextBox x:Name="TxtMappingInvoiceName" Grid.Column="1" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <TextBox x:Name="TxtMappingDbName" Grid.Column="2" Style="{StaticResource InputStyle}" Margin="0,0,6,0" IsReadOnly="True"/>
+                        <ComboBox x:Name="CmbMappingStatus" Grid.Column="3" Style="{StaticResource ComboStyle}" Margin="0,0,6,0" SelectedIndex="0">
+                            <ComboBoxItem Content="trusted"/>
+                            <ComboBoxItem Content="candidate"/>
+                            <ComboBoxItem Content="blocked"/>
+                        </ComboBox>
+                        <Button x:Name="BtnSearchDbProduct" Grid.Column="4" Content="Cari" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnSearchDbProduct_Click" ToolTip="Cari produk di database Aronium"/>
+                        <Button x:Name="BtnAddMapping" Grid.Column="5" Content="+ Simpan" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnAddMapping_Click"/>
+                        <Button x:Name="BtnRefreshMappings" Grid.Column="6" Content="Refresh" Style="{StaticResource SmallButtonStyle}" Margin="4,0,0,0" Click="BtnRefreshMappings_Click"/>
                     </Grid>
 
                     <DataGrid x:Name="DgProductMappings"
@@ -537,15 +564,20 @@
                               BorderThickness="1"
                               Margin="0,0,0,2">
                         <DataGrid.Columns>
+                            <DataGridTextColumn Header="Supplier" Width="90" Binding="{Binding SupplierKey}"/>
                             <DataGridTextColumn Header="Nama di Faktur" Width="*" Binding="{Binding InvoiceName}"/>
                             <DataGridTextColumn Header="Produk di Database" Width="*" Binding="{Binding DatabaseProductName}"/>
+                            <DataGridTextColumn Header="Source" Width="95" Binding="{Binding Source}"/>
+                            <DataGridTextColumn Header="Status" Width="80" Binding="{Binding TrustLevel}"/>
+                            <DataGridTextColumn Header="Origin" Width="70" Binding="{Binding Origin}"/>
                             <DataGridTextColumn Header="ID" Width="80" Binding="{Binding DatabaseProductId}" IsReadOnly="True"/>
-                            <DataGridTemplateColumn Header="" Width="140">
+                            <DataGridTemplateColumn Header="" Width="185">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
-                                            <Button Content="Edit" Tag="{Binding InvoiceName}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnEditMapping_Click"/>
-                                            <Button Content="Hapus" Tag="{Binding InvoiceName}" Style="{StaticResource SmallButtonStyle}" Click="BtnDeleteMapping_Click"/>
+                                            <Button Content="Edit" Tag="{Binding}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnEditMapping_Click"/>
+                                            <Button Content="Block" Tag="{Binding}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnBlockMapping_Click"/>
+                                            <Button Content="Hapus" Tag="{Binding}" Style="{StaticResource SmallButtonStyle}" Click="BtnDeleteMapping_Click"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>

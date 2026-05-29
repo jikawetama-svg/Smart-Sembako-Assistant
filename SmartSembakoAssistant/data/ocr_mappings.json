@@ -1,22 +1,74 @@
-[
-  {
-    "InvoiceName": "Soklin Pwd Sft Sct 43Gr Pink",
-    "DatabaseProductId": "1077",
-    "DatabaseProductName": "LIKUIT 500@1DUS"
-  },
-  {
-    "InvoiceName": "Daia Pwd Sct 47Gr Vio Pass",
-    "DatabaseProductId": "1054",
-    "DatabaseProductName": "Daia/SoKlin @Dus"
-  },
-  {
-    "InvoiceName": "Ekonomi Crm Sct 175Gr Nanas",
-    "DatabaseProductId": "895",
-    "DatabaseProductName": "ekonomi@2000 1 dus"
-  },
-  {
-    "InvoiceName": "Scorpion 1pk",
-    "DatabaseProductId": "562",
-    "DatabaseProductName": "SCORPION 1 Pak"
-  }
-]
+{
+  "SchemaVersion": 2,
+  "Suppliers": [
+    {
+      "SupplierKey": "GLOBAL",
+      "SupplierNames": [],
+      "Mappings": [
+        {
+          "SupplierKey": "GLOBAL",
+          "InvoiceName": "Scorpion 1pk",
+          "NormalizedInvoiceName": "scorpion 1pk",
+          "DatabaseProductId": "562",
+          "DatabaseProductName": "SCORPION 1 Pak",
+          "Source": "manual",
+          "TrustLevel": "trusted",
+          "Note": "Migrated from legacy flat ocr_mappings.json."
+        }
+      ]
+    },
+    {
+      "SupplierKey": "WINGS",
+      "SupplierNames": [
+        "WINGS",
+        "PT. SAYAP MAS UTAMA"
+      ],
+      "Mappings": [
+        {
+          "SupplierKey": "WINGS",
+          "InvoiceName": "Ekonomi Crm Sct 175Gr Nanas",
+          "NormalizedInvoiceName": "ekonomi crm sct 175gr nanas",
+          "DatabaseProductId": "895",
+          "DatabaseProductName": "ekonomi@2000 1 dus",
+          "Source": "review-queue",
+          "TrustLevel": "blocked",
+          "LastSeenAt": "2026-05-30T00:58:16+07:00",
+          "Note": "Blocked setelah audit WINGS 2026-05-30 karena salah mapping produk."
+        },
+        {
+          "SupplierKey": "WINGS",
+          "InvoiceName": "Rapika Biang Sct 7Ml Hijab",
+          "NormalizedInvoiceName": "rapika biang sct 7ml hijab",
+          "DatabaseProductId": "881",
+          "DatabaseProductName": "Emeron Hijab",
+          "Source": "auto-match",
+          "TrustLevel": "blocked",
+          "LastSeenAt": "2026-05-30T00:58:16+07:00",
+          "Note": "Blocked setelah audit WINGS 2026-05-30 karena brand mismatch Rapika vs Emeron."
+        },
+        {
+          "SupplierKey": "WINGS",
+          "InvoiceName": "Daia Pwd Sct 47Gr Vio Pass",
+          "NormalizedInvoiceName": "daia pwd sct 47gr vio pass",
+          "DatabaseProductId": "1054",
+          "DatabaseProductName": "Daia/SoKlin @Dus",
+          "Source": "review-queue",
+          "TrustLevel": "blocked",
+          "LastSeenAt": "2026-05-30T00:58:16+07:00",
+          "Note": "Blocked setelah audit WINGS 2026-05-30 karena salah mapping produk."
+        },
+        {
+          "SupplierKey": "WINGS",
+          "InvoiceName": "Soklin Pwd Sft Sct 43Gr Pink",
+          "NormalizedInvoiceName": "soklin pwd sft sct 43gr pink",
+          "DatabaseProductId": "1077",
+          "DatabaseProductName": "LIKUIT 500@1DUS",
+          "Source": "review-queue",
+          "TrustLevel": "blocked",
+          "LastSeenAt": "2026-05-30T00:58:16+07:00",
+          "Note": "Blocked setelah audit WINGS 2026-05-30 karena salah mapping produk."
+        }
+      ]
+    }
+  ]
+}

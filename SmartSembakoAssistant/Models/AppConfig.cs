@@ -154,7 +154,7 @@ namespace SmartSembakoAssistant.Models
         public bool EnableDualStockRealtimeWatcher { get; set; } = false;
         public int DualStockSyncIntervalSeconds { get; set; } = 15;
         public string? DualStockDailySyncTime { get; set; } = "21:00";
-        public string? DailySummaryTime { get; set; } = "07:00";
+        public string? DailySummaryTime { get; set; } = "21:15";
         public string? LowStockAlertTime { get; set; } = "07:00";
         public string? ReceivableAlertTime { get; set; } = "08:00";
         public string? ExpiryAlertTime { get; set; } = "08:30";
@@ -162,6 +162,15 @@ namespace SmartSembakoAssistant.Models
         public bool EnableTelegramLowStockAlerts { get; set; } = false;
         public bool EnableWhatsAppCloudLowStockAlerts { get; set; } = false;
         public bool EnableBaileysLowStockAlerts { get; set; } = false;
+        public bool EnableTelegramDailySummaryAlerts { get; set; } = true;
+        public bool EnableWhatsAppCloudDailySummaryAlerts { get; set; } = false;
+        public bool EnableBaileysDailySummaryAlerts { get; set; } = false;
+        public bool EnableWeeklyReport { get; set; } = false;
+        public string? WeeklyReportTime { get; set; } = "07:00";
+        public bool EnableTelegramWeeklyReportAlerts { get; set; } = true;
+        public bool EnableWhatsAppCloudWeeklyReportAlerts { get; set; } = false;
+        public bool EnableBaileysWeeklyReportAlerts { get; set; } = false;
+        public bool EnableAIReportNarrative { get; set; } = false;
         public bool EnableTelegramDualStockAlerts { get; set; } = true;
         public bool EnableWhatsAppCloudDualStockAlerts { get; set; } = false;
         public bool EnableBaileysDualStockAlerts { get; set; } = false;
@@ -207,12 +216,39 @@ namespace SmartSembakoAssistant.Models
     /// <summary>Pemetaan satu nama produk di faktur supplier ke satu produk di database Aronium.</summary>
     public class OcrProductMapping
     {
+        /// <summary>Supplier/vendor pemilik mapping. GLOBAL dipakai untuk mapping lama yang belum punya supplier.</summary>
+        public string SupplierKey { get; set; } = "GLOBAL";
         /// <summary>Nama produk seperti yang tertulis di faktur/struk supplier (bisa substring).</summary>
         public string InvoiceName { get; set; } = "";
+        /// <summary>Nama invoice yang sudah dinormalisasi untuk trace dan lookup.</summary>
+        public string? NormalizedInvoiceName { get; set; }
         /// <summary>ID produk di database Aronium (tabel Product.Id).</summary>
         public string DatabaseProductId { get; set; } = "";
         /// <summary>Nama produk di database Aronium (untuk tampilan UI dan konfirmasi).</summary>
         public string DatabaseProductName { get; set; } = "";
+        /// <summary>Sumber mapping: manual, config-mapping, review-queue, auto-match, legacy-alias.</summary>
+        public string Source { get; set; } = "manual";
+        /// <summary>Status trust mapping: trusted, candidate, blocked, legacy.</summary>
+        public string TrustLevel { get; set; } = "trusted";
+        public decimal? Confidence { get; set; }
+        public DateTime? CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+        public DateTime? LastSeenAt { get; set; }
+        public DateTime? LastConfirmedAt { get; set; }
+        public string? Note { get; set; }
+    }
+
+    public class OcrMappingsDocument
+    {
+        public int SchemaVersion { get; set; } = 2;
+        public List<OcrSupplierMappings> Suppliers { get; set; } = new();
+    }
+
+    public class OcrSupplierMappings
+    {
+        public string SupplierKey { get; set; } = "GLOBAL";
+        public List<string> SupplierNames { get; set; } = new();
+        public List<OcrProductMapping> Mappings { get; set; } = new();
     }
 
     public class MemorySettings
@@ -227,6 +263,7 @@ namespace SmartSembakoAssistant.Models
         public List<StockThreshold>? StockThresholds { get; set; }
         public List<ExpiryThreshold>? ExpiryThresholds { get; set; }
         public bool EnableDailySummary { get; set; } = false;
+        [Obsolete("Runtime laporan harian memakai AutomationSettings.DailySummaryTime.")]
         public string? DailySummaryTime { get; set; } = "08:00";
         public int CheckIntervalMinutes { get; set; } = 5;
 

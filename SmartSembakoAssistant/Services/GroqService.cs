@@ -131,6 +131,54 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
+        public async Task<string> GenerateTrendAnalysisAsync(TrendAnalysisPromptData data)
+        {
+            try
+            {
+                string monthlyGrowth = data.MonthlyHasGrowthBaseline
+                    ? $"{data.MonthlyGrowthPct:+0.##;-0.##;0}%"
+                    : "N/A";
+                string topProduct = string.IsNullOrWhiteSpace(data.TopProductName)
+                    ? "tidak diketahui"
+                    : $"{data.TopProductName} ({FormatPromptCurrency(data.TopProductRevenue)})";
+
+                string systemPrompt =
+                    "Kamu analis bisnis toko sembako. Jawab dalam bahasa Indonesia yang natural, ringkas, dan actionable. " +
+                    "Jangan mengarang angka atau penyebab yang tidak ada di data.";
+                string userPrompt =
+                    "Berdasarkan data toko berikut:\n" +
+                    $"- Omzet minggu ini: {FormatPromptCurrency(data.WeeklyRevenue)}, tren {data.WeeklyTrendLabel} {data.WeeklyGrowthPct:+0.##;-0.##;0}% vs minggu lalu\n" +
+                    $"- Omzet bulan berjalan: {FormatPromptCurrency(data.MonthlyRevenue)}, growth {monthlyGrowth} vs bulan sebelumnya\n" +
+                    $"- Produk terlaris: {topProduct}\n" +
+                    $"- Catatan: {(string.IsNullOrWhiteSpace(data.AnomalyNote) ? "tidak ada anomali" : data.AnomalyNote)}\n\n" +
+                    "Buat ringkasan insight bisnis 3-4 kalimat. Akhiri dengan satu saran konkret dan singkat untuk pemilik toko.";
+
+                string response = await SendPromptAsync(systemPrompt, userPrompt, temperature: 0.5, maxTokens: 400);
+                if (string.IsNullOrWhiteSpace(response) ||
+                    response.Contains("AI sedang gangguan", StringComparison.OrdinalIgnoreCase) ||
+                    response.Contains("Limit AI", StringComparison.OrdinalIgnoreCase) ||
+                    response.Contains("Error API", StringComparison.OrdinalIgnoreCase))
+                {
+                    return string.Empty;
+                }
+
+                return response.Trim();
+            }
+            catch (Exception ex)
+            {
+                await _loggingService.LogErrorAsync(
+                    $"Generate trend analysis failed: {ex.Message}",
+                    "AI",
+                    ex.ToString());
+                return string.Empty;
+            }
+        }
+
+        private static string FormatPromptCurrency(decimal value)
+        {
+            return string.Format(CultureInfo.GetCultureInfo("id-ID"), "Rp {0:N0}", value);
+        }
+
         private async Task<string> SendGroqRequestAsync(string systemPrompt, string userPrompt, double temperature, int maxTokens)
         {
             var requestBody = new

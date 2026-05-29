@@ -1803,6 +1803,38 @@ namespace SmartSembakoAssistant.Services
             return null;
         }
 
+        public async Task<List<ProductAliasEntry>> GetProductAliasesAsync(int limit = 500)
+        {
+            var aliases = new List<ProductAliasEntry>();
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            const string sql = @"
+                SELECT alias_name, product_id, product_name, source, created_at, updated_at
+                FROM product_aliases
+                ORDER BY updated_at DESC
+                LIMIT @limit";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@limit", Math.Max(1, limit));
+
+            using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                aliases.Add(new ProductAliasEntry
+                {
+                    AliasName = reader.GetString(0),
+                    ProductId = reader.GetString(1),
+                    ProductName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Source = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    CreatedAt = ParseDbTimestamp(reader.GetString(4)),
+                    UpdatedAt = ParseDbTimestamp(reader.GetString(5))
+                });
+            }
+
+            return aliases;
+        }
+
         public async Task DeleteProductAliasAsync(string aliasName)
         {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");

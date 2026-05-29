@@ -204,7 +204,9 @@ namespace SmartSembakoAssistant.Services
                                 Priority = threshold.Priority
                             }).ToList(),
                         EnableDailySummary = _config.Notifications.EnableDailySummary,
+#pragma warning disable CS0618
                         DailySummaryTime = _config.Notifications.DailySummaryTime,
+#pragma warning restore CS0618
                         CheckIntervalMinutes = _config.Notifications.CheckIntervalMinutes
                     } : null,
                     App = _config?.App,
@@ -425,11 +427,20 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
-        public void AddOcrMapping(string invoiceName, string dbProductId, string dbProductName)
+        public void AddOcrMapping(
+            string invoiceName,
+            string dbProductId,
+            string dbProductName,
+            string? supplierKey = null,
+            string source = "manual",
+            string trustLevel = "trusted",
+            decimal? confidence = null,
+            string? note = null)
         {
             string normalizedInvoiceName = invoiceName?.Trim() ?? string.Empty;
             string normalizedDbProductId = dbProductId?.Trim() ?? string.Empty;
             string normalizedDbProductName = dbProductName?.Trim() ?? string.Empty;
+            string normalizedSupplierKey = NormalizeOcrSupplierKey(supplierKey);
 
             if (string.IsNullOrWhiteSpace(normalizedInvoiceName) ||
                 string.IsNullOrWhiteSpace(normalizedDbProductId) ||
@@ -443,21 +454,43 @@ namespace SmartSembakoAssistant.Services
             _config.OcrReceipt.ProductMappings ??= new List<OcrProductMapping>();
 
             var existing = _config.OcrReceipt.ProductMappings.FirstOrDefault(mapping =>
-                string.Equals(mapping.InvoiceName, normalizedInvoiceName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(NormalizeOcrSupplierKey(mapping.SupplierKey), normalizedSupplierKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(NormalizeOcrName(mapping.InvoiceName), NormalizeOcrName(normalizedInvoiceName), StringComparison.OrdinalIgnoreCase));
 
+            DateTime now = DateTime.Now;
             if (existing != null)
             {
+                existing.SupplierKey = normalizedSupplierKey;
                 existing.InvoiceName = normalizedInvoiceName;
+                existing.NormalizedInvoiceName = NormalizeOcrName(normalizedInvoiceName);
                 existing.DatabaseProductId = normalizedDbProductId;
                 existing.DatabaseProductName = normalizedDbProductName;
+                existing.Source = string.IsNullOrWhiteSpace(source) ? existing.Source : source;
+                existing.TrustLevel = string.IsNullOrWhiteSpace(trustLevel) ? existing.TrustLevel : trustLevel;
+                existing.Confidence = confidence ?? existing.Confidence;
+                existing.Note = note ?? existing.Note;
+                existing.UpdatedAt = now;
+                if (string.Equals(existing.TrustLevel, "trusted", StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.LastConfirmedAt = now;
+                }
             }
             else
             {
                 _config.OcrReceipt.ProductMappings.Add(new OcrProductMapping
                 {
+                    SupplierKey = normalizedSupplierKey,
                     InvoiceName = normalizedInvoiceName,
+                    NormalizedInvoiceName = NormalizeOcrName(normalizedInvoiceName),
                     DatabaseProductId = normalizedDbProductId,
-                    DatabaseProductName = normalizedDbProductName
+                    DatabaseProductName = normalizedDbProductName,
+                    Source = string.IsNullOrWhiteSpace(source) ? "manual" : source,
+                    TrustLevel = string.IsNullOrWhiteSpace(trustLevel) ? "trusted" : trustLevel,
+                    Confidence = confidence,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    LastConfirmedAt = string.Equals(trustLevel, "trusted", StringComparison.OrdinalIgnoreCase) ? now : null,
+                    Note = note
                 });
             }
 
@@ -719,7 +752,23 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 string json = File.ReadAllText(_ocrMappingsPath);
-                return CloneOcrMappings(JsonConvert.DeserializeObject<List<OcrProductMapping>>(json));
+                var token = JToken.Parse(json);
+                if (token.Type == JTokenType.Array)
+                {
+                    return CloneOcrMappings(token.ToObject<List<OcrProductMapping>>());
+                }
+
+                var document = token.ToObject<OcrMappingsDocument>();
+                var mappings = document?.Suppliers?
+                    .SelectMany(supplier => (supplier.Mappings ?? new List<OcrProductMapping>())
+                        .Select(mapping =>
+                        {
+                            mapping.SupplierKey = NormalizeOcrSupplierKey(
+                                string.IsNullOrWhiteSpace(mapping.SupplierKey) ? supplier.SupplierKey : mapping.SupplierKey);
+                            return mapping;
+                        }))
+                    .ToList();
+                return CloneOcrMappings(mappings);
             }
             catch
             {
@@ -736,7 +785,26 @@ namespace SmartSembakoAssistant.Services
                 Directory.CreateDirectory(directory);
             }
 
-            string json = JsonConvert.SerializeObject(safeMappings, Formatting.Indented);
+            var document = new OcrMappingsDocument
+            {
+                SchemaVersion = 2,
+                Suppliers = safeMappings
+                    .GroupBy(mapping => NormalizeOcrSupplierKey(mapping.SupplierKey), StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new OcrSupplierMappings
+                    {
+                        SupplierKey = group.Key,
+                        SupplierNames = group.Key == "WINGS"
+                            ? new List<string> { "WINGS", "PT. SAYAP MAS UTAMA" }
+                            : new List<string>(),
+                        Mappings = group
+                            .OrderBy(mapping => mapping.InvoiceName, StringComparer.OrdinalIgnoreCase)
+                            .ToList()
+                    })
+                    .ToList()
+            };
+
+            string json = JsonConvert.SerializeObject(document, Formatting.Indented);
             File.WriteAllText(_ocrMappingsPath, json);
         }
 
@@ -759,11 +827,81 @@ namespace SmartSembakoAssistant.Services
                 .Where(mapping => mapping != null)
                 .Select(mapping => new OcrProductMapping
                 {
+                    SupplierKey = NormalizeOcrSupplierKey(mapping.SupplierKey),
                     InvoiceName = mapping.InvoiceName,
+                    NormalizedInvoiceName = string.IsNullOrWhiteSpace(mapping.NormalizedInvoiceName)
+                        ? NormalizeOcrName(mapping.InvoiceName)
+                        : mapping.NormalizedInvoiceName,
                     DatabaseProductId = mapping.DatabaseProductId,
-                    DatabaseProductName = mapping.DatabaseProductName
+                    DatabaseProductName = mapping.DatabaseProductName,
+                    Source = string.IsNullOrWhiteSpace(mapping.Source) ? "legacy" : mapping.Source,
+                    TrustLevel = string.IsNullOrWhiteSpace(mapping.TrustLevel) ? "trusted" : mapping.TrustLevel,
+                    Confidence = mapping.Confidence,
+                    CreatedAt = mapping.CreatedAt,
+                    UpdatedAt = mapping.UpdatedAt,
+                    LastSeenAt = mapping.LastSeenAt,
+                    LastConfirmedAt = mapping.LastConfirmedAt,
+                    Note = mapping.Note
                 })
                 .ToList() ?? new List<OcrProductMapping>();
+        }
+
+        public static string NormalizeOcrSupplierKey(string? supplierName)
+        {
+            if (string.IsNullOrWhiteSpace(supplierName))
+            {
+                return "GLOBAL";
+            }
+
+            string normalized = supplierName.Trim().ToUpperInvariant();
+            if (normalized.Contains("WINGS", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("SAYAP MAS", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("WINGS_SURAT_JALAN", StringComparison.OrdinalIgnoreCase))
+            {
+                return "WINGS";
+            }
+
+            if (normalized.Contains("FASTRATA", StringComparison.OrdinalIgnoreCase))
+            {
+                return "FASTRATA";
+            }
+
+            if (normalized.Contains("TANI", StringComparison.OrdinalIgnoreCase))
+            {
+                return "TANI_MAKMUR";
+            }
+
+            return normalized
+                .Replace(" ", "_")
+                .Replace("/", "_")
+                .Replace(".", "")
+                .Replace("-", "_");
+        }
+
+        public static string NormalizeOcrName(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+            bool lastWasSpace = false;
+            foreach (char ch in value.Trim().ToLowerInvariant())
+            {
+                if (char.IsLetterOrDigit(ch))
+                {
+                    builder.Append(ch);
+                    lastWasSpace = false;
+                }
+                else if (!lastWasSpace)
+                {
+                    builder.Append(' ');
+                    lastWasSpace = true;
+                }
+            }
+
+            return builder.ToString().Trim();
         }
 
         private static string ResolveSiblingPath(string baseFilePath, string relativePath)

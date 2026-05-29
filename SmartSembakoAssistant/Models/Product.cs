@@ -437,6 +437,7 @@ namespace SmartSembakoAssistant.Models
         public string? DateLabel { get; set; }
         public string? FormattedDate => Date.ToString("dd/MM");
         public int TransactionCount { get; set; }
+        public decimal QuantitySold { get; set; }
         public decimal Revenue { get; set; }
         public string? FormattedRevenue => $"Rp {Revenue:N0}";
         /// <summary>

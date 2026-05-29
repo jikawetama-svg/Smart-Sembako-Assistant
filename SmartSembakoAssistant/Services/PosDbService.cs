@@ -3012,6 +3012,7 @@ namespace SmartSembakoAssistant.Services
             string[] exactCategories = normalized switch
             {
                 var value when value.Contains("rokok") => new[] { "Rokok" },
+                var value when value.Contains("minuman seduh") => new[] { "Minuman Seduh" },
                 var value when value.Contains("minuman") || value.Contains("minum") => new[] { "Minuman", "Minuman Seduh" },
                 var value when value.Contains("mie") || value.Contains("mi instan") => new[] { "Mie Instant" },
                 var value when value.Contains("obat") => new[] { "Obat", "Obat Nyamuk", "Obat Obatan" },
@@ -3277,6 +3278,51 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 return 0;
+            }
+        }
+
+        public async Task<DateTime?> GetLatestStockMutationDateAsync()
+        {
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return null;
+                }
+
+                string effectiveDateExpression = "COALESCE(NULLIF(d.StockDate, ''), NULLIF(d.DateUpdated, ''), NULLIF(d.DateCreated, ''), d.Date)";
+                string sql = $@"
+                    SELECT {effectiveDateExpression}
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId IN (2, 3)
+                    ORDER BY datetime({effectiveDateExpression}) DESC, d.Id DESC
+                    LIMIT 1";
+
+                using var command = new SqliteCommand(sql, connection);
+                object? value = await command.ExecuteScalarAsync();
+                if (value == null || value == DBNull.Value)
+                {
+                    return null;
+                }
+
+                return DateTime.TryParse(value.ToString(), out var parsed)
+                    ? parsed
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading latest stock mutation date: {ex.Message}", "Database", ex.ToString());
+                }
+
+                return null;
             }
         }
 
@@ -5500,6 +5546,303 @@ namespace SmartSembakoAssistant.Services
                 {
                     await _loggingService.LogErrorAsync(
                         $"Error reading daily trend: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return trend;
+        }
+
+        public async Task<WeeklySalesComparison> GetWeeklySalesComparisonAsync()
+        {
+            DateTime today = DateTime.Today;
+            int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
+            DateTime thisWeekStart = today.AddDays(-diff);
+            DateTime lastWeekStart = thisWeekStart.AddDays(-7);
+            DateTime lastWeekEnd = thisWeekStart.AddDays(-1);
+
+            var thisWeekRevenueTask = GetSalesRevenueAsync(thisWeekStart, today);
+            var lastWeekRevenueTask = GetSalesRevenueAsync(lastWeekStart, lastWeekEnd);
+            var thisWeekProfitTask = GetSalesProfitAsync(thisWeekStart, today);
+            var lastWeekProfitTask = GetSalesProfitAsync(lastWeekStart, lastWeekEnd);
+            var thisWeekTxTask = GetSalesTransactionCountAsync(thisWeekStart, today);
+            var lastWeekTxTask = GetSalesTransactionCountAsync(lastWeekStart, lastWeekEnd);
+            var topProductsTask = GetTopSellingProductsAsync(thisWeekStart, today, 3);
+
+            await Task.WhenAll(
+                thisWeekRevenueTask,
+                lastWeekRevenueTask,
+                thisWeekProfitTask,
+                lastWeekProfitTask,
+                thisWeekTxTask,
+                lastWeekTxTask,
+                topProductsTask);
+
+            var result = new WeeklySalesComparison
+            {
+                ThisWeekRevenue = await thisWeekRevenueTask,
+                LastWeekRevenue = await lastWeekRevenueTask,
+                ThisWeekProfit = await thisWeekProfitTask,
+                LastWeekProfit = await lastWeekProfitTask,
+                ThisWeekTxCount = await thisWeekTxTask,
+                LastWeekTxCount = await lastWeekTxTask,
+                TopProducts = await topProductsTask
+            };
+
+            result.GrowthPct = result.LastWeekRevenue == 0
+                ? (result.ThisWeekRevenue > 0 ? 100 : 0)
+                : (result.ThisWeekRevenue - result.LastWeekRevenue) / result.LastWeekRevenue * 100;
+            if (result.GrowthPct > 2)
+            {
+                result.TrendLabel = "NAIK";
+                result.TrendIcon = "UP";
+            }
+            else if (result.GrowthPct < -2)
+            {
+                result.TrendLabel = "TURUN";
+                result.TrendIcon = "DOWN";
+            }
+            else
+            {
+                result.TrendLabel = "STABIL";
+                result.TrendIcon = "FLAT";
+            }
+
+            return result;
+        }
+
+        public async Task<List<MonthlySalesTrend>> GetMonthlySalesTrendAsync(int monthsBack = 12)
+        {
+            int safeMonths = Math.Clamp(monthsBack, 1, 24);
+            DateTime firstMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-safeMonths);
+            var months = new List<MonthlySalesTrend>();
+            for (int i = 0; i < safeMonths + 1; i++)
+            {
+                DateTime month = firstMonth.AddMonths(i);
+                months.Add(new MonthlySalesTrend
+                {
+                    Year = month.Year,
+                    Month = month.Month,
+                    Label = month.ToString("MMM yyyy", CultureInfo.InvariantCulture),
+                    Revenue = 0,
+                    Profit = 0,
+                    TxCount = 0
+                });
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return months;
+                }
+
+                string startDateStr = firstMonth.ToString("yyyy-MM-dd");
+                string sql = string.IsNullOrEmpty(documentItemTable)
+                    ? $@"
+                        SELECT strftime('%Y', d.Date), strftime('%m', d.Date), COUNT(d.Id), COALESCE(SUM(d.Total), 0), 0
+                        FROM {ValidateTableName(documentTable)} d
+                        WHERE d.DocumentTypeId = 2
+                          AND date(d.Date) >= @startDate
+                        GROUP BY strftime('%Y-%m', d.Date)
+                        ORDER BY strftime('%Y-%m', d.Date)"
+                    : $@"
+                        SELECT
+                            strftime('%Y', d.Date),
+                            strftime('%m', d.Date),
+                            COUNT(DISTINCT d.Id),
+                            COALESCE(SUM(di.Total), 0),
+                            COALESCE(SUM((di.Price - di.ProductCost) * di.Quantity), 0)
+                        FROM {ValidateTableName(documentTable)} d
+                        LEFT JOIN {ValidateTableName(documentItemTable)} di ON di.DocumentId = d.Id
+                        WHERE d.DocumentTypeId = 2
+                          AND date(d.Date) >= @startDate
+                        GROUP BY strftime('%Y-%m', d.Date)
+                        ORDER BY strftime('%Y-%m', d.Date)";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", startDateStr);
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    int year = int.TryParse(reader.GetValue(0)?.ToString(), out var parsedYear) ? parsedYear : 0;
+                    int month = int.TryParse(reader.GetValue(1)?.ToString(), out var parsedMonth) ? parsedMonth : 0;
+                    var item = months.FirstOrDefault(x => x.Year == year && x.Month == month);
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    item.TxCount = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
+                    item.Revenue = SafeConvertToDecimal(reader, 3) ?? 0;
+                    item.Profit = SafeConvertToDecimal(reader, 4) ?? 0;
+                }
+
+                MonthlySalesTrend? previous = null;
+                foreach (var item in months)
+                {
+                    item.HasGrowthBaseline = previous != null && previous.Revenue > 0;
+                    item.GrowthVsPrevMonth = item.HasGrowthBaseline
+                        ? (item.Revenue - previous!.Revenue) / previous.Revenue * 100
+                        : 0;
+                    previous = item;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading monthly sales trend: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return months.Skip(1).ToList();
+        }
+
+        public async Task<List<HourlySalesData>> GetHourlySalesAsync(DateTime date)
+        {
+            var rows = Enumerable.Range(0, 24)
+                .Select(hour => new HourlySalesData
+                {
+                    Hour = hour,
+                    HourLabel = $"{hour:00}:00-{(hour + 1) % 24:00}:00"
+                })
+                .ToList();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return rows;
+                }
+
+                string sql = $@"
+                    SELECT
+                        CAST(strftime('%H', Date) AS INTEGER) AS SaleHour,
+                        COUNT(Id),
+                        COALESCE(SUM(Total), 0)
+                    FROM {ValidateTableName(documentTable)}
+                    WHERE DocumentTypeId = 2
+                      AND date(Date) = @date
+                    GROUP BY CAST(strftime('%H', Date) AS INTEGER)
+                    ORDER BY SaleHour";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    int hour = reader.IsDBNull(0) ? -1 : Convert.ToInt32(reader.GetValue(0));
+                    var item = rows.FirstOrDefault(x => x.Hour == hour);
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    item.TxCount = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1));
+                    item.Revenue = SafeConvertToDecimal(reader, 2) ?? 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading hourly sales: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return rows;
+        }
+
+        public async Task<List<DailySalesData>> GetProductDailySalesAsync(string productId, DateTime startDate, DateTime endDate)
+        {
+            var trend = new List<DailySalesData>();
+            for (DateTime date = startDate.Date; date <= endDate.Date; date = date.AddDays(1))
+            {
+                trend.Add(new DailySalesData
+                {
+                    Date = date,
+                    DateLabel = date.ToString("dd/MM"),
+                    TransactionCount = 0,
+                    QuantitySold = 0,
+                    Revenue = 0
+                });
+            }
+
+            if (string.IsNullOrWhiteSpace(productId))
+            {
+                return trend;
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                {
+                    return trend;
+                }
+
+                string sql = $@"
+                    SELECT
+                        date(d.Date),
+                        COUNT(DISTINCT d.Id),
+                        COALESCE(SUM(ABS(di.Quantity)), 0),
+                        COALESCE(SUM(di.Total), 0)
+                    FROM {ValidateTableName(documentTable)} d
+                    INNER JOIN {ValidateTableName(documentItemTable)} di ON di.DocumentId = d.Id
+                    WHERE d.DocumentTypeId = 2
+                      AND di.ProductId = @productId
+                      AND date(d.Date) >= @startDate
+                      AND date(d.Date) <= @endDate
+                    GROUP BY date(d.Date)
+                    ORDER BY date(d.Date)";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@productId", productId);
+                command.Parameters.AddWithValue("@startDate", startDate.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", endDate.ToString("yyyy-MM-dd"));
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    if (!DateTime.TryParse(reader.GetValue(0)?.ToString(), out var date))
+                    {
+                        continue;
+                    }
+
+                    var item = trend.FirstOrDefault(x => x.Date.Date == date.Date);
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    item.TransactionCount = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1));
+                    item.QuantitySold = SafeConvertToDecimal(reader, 2) ?? 0;
+                    item.Revenue = SafeConvertToDecimal(reader, 3) ?? 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading product daily sales trend: {ex.Message}", "Database", ex.ToString());
                 }
             }
 

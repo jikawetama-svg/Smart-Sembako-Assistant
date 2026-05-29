@@ -26,12 +26,26 @@ namespace SmartSembakoAssistant.Views
         private bool _whatsAppAppSecretVisible;
         private bool _whatsAppVerifyTokenVisible;
         private readonly ObservableCollection<OcrProductMapping> _ocrProductMappings = new();
+        private readonly ObservableCollection<OcrMappingRegistryRow> _ocrMappingRegistryRows = new();
         private readonly ObservableCollection<OcrReviewQueueItem> _ocrReviewQueueItems = new();
         private readonly ObservableCollection<UnitConversionMapping> _unitConversionMappings = new();
         private string? _selectedMappingProductId;
         private string? _selectedUnitConversionId;
         private string? _selectedParentConversionProductId;
         private string? _selectedChildConversionProductId;
+
+        private sealed class OcrMappingRegistryRow
+        {
+            public string SupplierKey { get; set; } = "GLOBAL";
+            public string InvoiceName { get; set; } = "";
+            public string DatabaseProductId { get; set; } = "";
+            public string DatabaseProductName { get; set; } = "";
+            public string Source { get; set; } = "";
+            public string TrustLevel { get; set; } = "";
+            public DateTime? UpdatedAt { get; set; }
+            public bool IsRuntimeAlias { get; set; }
+            public string Origin => IsRuntimeAlias ? "Alias DB" : "JSON";
+        }
 
         public SettingsView(ConfigService configService, PosDbService? posDbService = null)
         {
@@ -40,7 +54,7 @@ namespace SmartSembakoAssistant.Views
             _posDbService = posDbService;
             _databaseService = new DatabaseService();
             _loggingService = new LoggingService(_databaseService);
-            DgProductMappings.ItemsSource = _ocrProductMappings;
+            DgProductMappings.ItemsSource = _ocrMappingRegistryRows;
             DgOcrReviewQueue.ItemsSource = _ocrReviewQueueItems;
             DgUnitConversions.ItemsSource = _unitConversionMappings;
 
@@ -48,6 +62,7 @@ namespace SmartSembakoAssistant.Views
             LoadSettings();
             Loaded += async (_, _) =>
             {
+                await RefreshOcrMappingRegistryAsync();
                 await RefreshOcrReviewQueueAsync();
                 await RefreshUnitConversionsAsync();
             };
@@ -134,7 +149,16 @@ namespace SmartSembakoAssistant.Views
                 ChkEnableWhatsAppCloudLowStockAlerts.IsChecked = config.Automation.EnableWhatsAppCloudLowStockAlerts;
                 ChkEnableBaileysLowStockAlerts.IsChecked = config.Automation.EnableBaileysLowStockAlerts;
                 ChkEnableDailySummary.IsChecked = config.Automation.EnableDailySummary;
-                TxtDailySummaryTime.Text = config.Automation.DailySummaryTime ?? "07:00";
+                TxtDailySummaryTime.Text = config.Automation.DailySummaryTime ?? "21:15";
+                ChkEnableTelegramDailySummaryAlerts.IsChecked = config.Automation.EnableTelegramDailySummaryAlerts;
+                ChkEnableWhatsAppCloudDailySummaryAlerts.IsChecked = config.Automation.EnableWhatsAppCloudDailySummaryAlerts;
+                ChkEnableBaileysDailySummaryAlerts.IsChecked = config.Automation.EnableBaileysDailySummaryAlerts;
+                ChkEnableWeeklyReport.IsChecked = config.Automation.EnableWeeklyReport;
+                TxtWeeklyReportTime.Text = config.Automation.WeeklyReportTime ?? "07:00";
+                ChkEnableTelegramWeeklyReportAlerts.IsChecked = config.Automation.EnableTelegramWeeklyReportAlerts;
+                ChkEnableWhatsAppCloudWeeklyReportAlerts.IsChecked = config.Automation.EnableWhatsAppCloudWeeklyReportAlerts;
+                ChkEnableBaileysWeeklyReportAlerts.IsChecked = config.Automation.EnableBaileysWeeklyReportAlerts;
+                ChkEnableAIReportNarrative.IsChecked = config.Automation.EnableAIReportNarrative;
                 ChkDualStockEnabled.IsChecked = config.Automation.EnableDualStockSync;
                 ChkDualStockRealtimeWatcherEnabled.IsChecked = config.Automation.EnableDualStockRealtimeWatcher;
                 ChkEnableTelegramDualStockAlerts.IsChecked = config.Automation.EnableTelegramDualStockAlerts;
@@ -331,8 +355,11 @@ namespace SmartSembakoAssistant.Views
             BtnBrowseTessdata.IsEnabled = ocrEnabled;
             TxtMappingInvoiceName.IsEnabled = ocrEnabled;
             TxtMappingDbName.IsEnabled = ocrEnabled;
+            CmbMappingSupplier.IsEnabled = ocrEnabled;
+            CmbMappingStatus.IsEnabled = ocrEnabled;
             BtnSearchDbProduct.IsEnabled = ocrEnabled && _posDbService != null;
             BtnAddMapping.IsEnabled = ocrEnabled;
+            BtnRefreshMappings.IsEnabled = ocrEnabled;
             DgProductMappings.IsEnabled = ocrEnabled;
             TxtConversionParentName.IsEnabled = ocrEnabled;
             TxtConversionChildName.IsEnabled = ocrEnabled;
@@ -565,6 +592,15 @@ namespace SmartSembakoAssistant.Views
             current.Automation.EnableBaileysLowStockAlerts = ChkEnableBaileysLowStockAlerts.IsChecked == true;
             current.Automation.EnableDailySummary = ChkEnableDailySummary.IsChecked == true;
             current.Automation.DailySummaryTime = TxtDailySummaryTime.Text.Trim();
+            current.Automation.EnableTelegramDailySummaryAlerts = ChkEnableTelegramDailySummaryAlerts.IsChecked == true;
+            current.Automation.EnableWhatsAppCloudDailySummaryAlerts = ChkEnableWhatsAppCloudDailySummaryAlerts.IsChecked == true;
+            current.Automation.EnableBaileysDailySummaryAlerts = ChkEnableBaileysDailySummaryAlerts.IsChecked == true;
+            current.Automation.EnableWeeklyReport = ChkEnableWeeklyReport.IsChecked == true;
+            current.Automation.WeeklyReportTime = TxtWeeklyReportTime.Text.Trim();
+            current.Automation.EnableTelegramWeeklyReportAlerts = ChkEnableTelegramWeeklyReportAlerts.IsChecked == true;
+            current.Automation.EnableWhatsAppCloudWeeklyReportAlerts = ChkEnableWhatsAppCloudWeeklyReportAlerts.IsChecked == true;
+            current.Automation.EnableBaileysWeeklyReportAlerts = ChkEnableBaileysWeeklyReportAlerts.IsChecked == true;
+            current.Automation.EnableAIReportNarrative = ChkEnableAIReportNarrative.IsChecked == true;
             current.Automation.EnableDualStockSync = ChkDualStockEnabled.IsChecked == true;
             current.Automation.EnableDualStockRealtimeWatcher = ChkDualStockRealtimeWatcherEnabled.IsChecked == true;
             current.Automation.EnableTelegramDualStockAlerts = ChkEnableTelegramDualStockAlerts.IsChecked == true;
@@ -588,9 +624,19 @@ namespace SmartSembakoAssistant.Views
             current.OcrReceipt.ProductMappings = _ocrProductMappings
                 .Select(mapping => new OcrProductMapping
                 {
+                    SupplierKey = ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey),
                     InvoiceName = mapping.InvoiceName,
+                    NormalizedInvoiceName = ConfigService.NormalizeOcrName(mapping.InvoiceName),
                     DatabaseProductId = mapping.DatabaseProductId,
-                    DatabaseProductName = mapping.DatabaseProductName
+                    DatabaseProductName = mapping.DatabaseProductName,
+                    Source = mapping.Source,
+                    TrustLevel = mapping.TrustLevel,
+                    Confidence = mapping.Confidence,
+                    CreatedAt = mapping.CreatedAt,
+                    UpdatedAt = mapping.UpdatedAt,
+                    LastSeenAt = mapping.LastSeenAt,
+                    LastConfirmedAt = mapping.LastConfirmedAt,
+                    Note = mapping.Note
                 })
                 .ToList();
 
@@ -750,7 +796,16 @@ namespace SmartSembakoAssistant.Views
                 return $"OCR aktif, tetapi perlu dicek: {string.Join(", ", warnings)}.";
             }
 
-            return $"OCR siap. Trigger {draft.OcrReceipt.TriggerCaption}, mapping produk {_ocrProductMappings.Count} item, conversion {_unitConversionMappings.Count} item. Hover status ini untuk lihat file mapping aktif.";
+            int trusted = _ocrProductMappings.Count(mapping =>
+                string.Equals(mapping.TrustLevel, "trusted", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(mapping.TrustLevel));
+            int candidate = _ocrMappingRegistryRows.Count(row =>
+                string.Equals(row.TrustLevel, "candidate", StringComparison.OrdinalIgnoreCase));
+            int blocked = _ocrProductMappings.Count(mapping =>
+                string.Equals(mapping.TrustLevel, "blocked", StringComparison.OrdinalIgnoreCase));
+            int runtimeAliases = _ocrMappingRegistryRows.Count(row => row.IsRuntimeAlias);
+
+            return $"OCR siap. Trigger {draft.OcrReceipt.TriggerCaption}, trusted {trusted}, candidate {candidate}, blocked {blocked}, alias runtime {runtimeAliases}, conversion {_unitConversionMappings.Count}. Hover status ini untuk lihat file mapping aktif.";
         }
 
         private string BuildSheetsValidation(AppConfig draft)
@@ -802,34 +857,61 @@ namespace SmartSembakoAssistant.Views
             {
                 _ocrProductMappings.Add(new OcrProductMapping
                 {
+                    SupplierKey = ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey),
                     InvoiceName = mapping.InvoiceName,
+                    NormalizedInvoiceName = ConfigService.NormalizeOcrName(mapping.InvoiceName),
                     DatabaseProductId = mapping.DatabaseProductId,
-                    DatabaseProductName = mapping.DatabaseProductName
+                    DatabaseProductName = mapping.DatabaseProductName,
+                    Source = string.IsNullOrWhiteSpace(mapping.Source) ? "legacy" : mapping.Source,
+                    TrustLevel = string.IsNullOrWhiteSpace(mapping.TrustLevel) ? "trusted" : mapping.TrustLevel,
+                    Confidence = mapping.Confidence,
+                    CreatedAt = mapping.CreatedAt,
+                    UpdatedAt = mapping.UpdatedAt,
+                    LastSeenAt = mapping.LastSeenAt,
+                    LastConfirmedAt = mapping.LastConfirmedAt,
+                    Note = mapping.Note
                 });
             }
+
+            RebuildOcrMappingRegistryRows();
         }
 
-        private void UpsertOcrMappingInGrid(string invoiceName, string dbProductId, string dbProductName)
+        private void UpsertOcrMappingInGrid(string invoiceName, string dbProductId, string dbProductName, string? supplierKey = null, string source = "manual", string trustLevel = "trusted")
         {
             string normalizedInvoiceName = invoiceName.Trim();
+            string normalizedSupplierKey = ConfigService.NormalizeOcrSupplierKey(supplierKey);
             var existing = _ocrProductMappings.FirstOrDefault(mapping =>
-                string.Equals(mapping.InvoiceName, normalizedInvoiceName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey), normalizedSupplierKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ConfigService.NormalizeOcrName(mapping.InvoiceName), ConfigService.NormalizeOcrName(normalizedInvoiceName), StringComparison.OrdinalIgnoreCase));
 
             if (existing != null)
             {
+                existing.SupplierKey = normalizedSupplierKey;
                 existing.InvoiceName = normalizedInvoiceName;
+                existing.NormalizedInvoiceName = ConfigService.NormalizeOcrName(normalizedInvoiceName);
                 existing.DatabaseProductId = dbProductId;
                 existing.DatabaseProductName = dbProductName;
-                DgProductMappings.Items.Refresh();
+                existing.Source = source;
+                existing.TrustLevel = trustLevel;
+                existing.UpdatedAt = DateTime.Now;
+                RebuildOcrMappingRegistryRows();
                 return;
             }
 
             _ocrProductMappings.Add(new OcrProductMapping
             {
+                SupplierKey = normalizedSupplierKey,
                 InvoiceName = normalizedInvoiceName,
+                NormalizedInvoiceName = ConfigService.NormalizeOcrName(normalizedInvoiceName),
                 DatabaseProductId = dbProductId,
-                DatabaseProductName = dbProductName
+                DatabaseProductName = dbProductName,
+                Source = source,
+                TrustLevel = trustLevel,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now,
+                LastConfirmedAt = string.Equals(trustLevel, "trusted", StringComparison.OrdinalIgnoreCase) ? DateTime.Now : null
             });
+            RebuildOcrMappingRegistryRows();
         }
 
         private void ClearMappingInputs()
@@ -837,13 +919,78 @@ namespace SmartSembakoAssistant.Views
             _selectedMappingProductId = null;
             TxtMappingInvoiceName.Text = string.Empty;
             TxtMappingDbName.Text = string.Empty;
+            SelectComboItem(CmbMappingSupplier, "GLOBAL");
+            SelectComboItem(CmbMappingStatus, "trusted");
         }
 
         private void PersistCurrentOcrMappings()
         {
             _configService.ReplaceOcrMappings(_ocrProductMappings);
+            RebuildOcrMappingRegistryRows();
             TxtOcrValidation.Text = BuildOcrValidation(BuildDraftConfig());
             TxtOcrValidation.ToolTip = _configService.OcrMappingsPath;
+        }
+
+        private void RebuildOcrMappingRegistryRows(IEnumerable<ProductAliasEntry>? aliases = null)
+        {
+            var existingAliases = aliases?.ToList();
+            _ocrMappingRegistryRows.Clear();
+            foreach (var mapping in _ocrProductMappings)
+            {
+                _ocrMappingRegistryRows.Add(new OcrMappingRegistryRow
+                {
+                    SupplierKey = ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey),
+                    InvoiceName = mapping.InvoiceName,
+                    DatabaseProductId = mapping.DatabaseProductId,
+                    DatabaseProductName = mapping.DatabaseProductName,
+                    Source = string.IsNullOrWhiteSpace(mapping.Source) ? "legacy" : mapping.Source,
+                    TrustLevel = string.IsNullOrWhiteSpace(mapping.TrustLevel) ? "trusted" : mapping.TrustLevel,
+                    UpdatedAt = mapping.UpdatedAt,
+                    IsRuntimeAlias = false
+                });
+            }
+
+            if (existingAliases == null)
+            {
+                return;
+            }
+
+            foreach (var alias in existingAliases)
+            {
+                bool alreadyVisible = _ocrProductMappings.Any(mapping =>
+                    string.Equals(ConfigService.NormalizeOcrName(mapping.InvoiceName), ConfigService.NormalizeOcrName(alias.AliasName), StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(mapping.DatabaseProductId, alias.ProductId, StringComparison.OrdinalIgnoreCase));
+                if (alreadyVisible)
+                {
+                    continue;
+                }
+
+                _ocrMappingRegistryRows.Add(new OcrMappingRegistryRow
+                {
+                    SupplierKey = "GLOBAL",
+                    InvoiceName = alias.AliasName,
+                    DatabaseProductId = alias.ProductId,
+                    DatabaseProductName = alias.ProductName ?? "",
+                    Source = string.IsNullOrWhiteSpace(alias.Source) ? "legacy-alias" : alias.Source,
+                    TrustLevel = "candidate",
+                    UpdatedAt = alias.UpdatedAt,
+                    IsRuntimeAlias = true
+                });
+            }
+        }
+
+        private async Task RefreshOcrMappingRegistryAsync()
+        {
+            try
+            {
+                var aliases = await _databaseService.GetProductAliasesAsync();
+                RebuildOcrMappingRegistryRows(aliases);
+                TxtOcrValidation.Text = BuildOcrValidation(BuildDraftConfig());
+            }
+            catch
+            {
+                RebuildOcrMappingRegistryRows();
+            }
         }
 
         private void ClearUnitConversionInputs()
@@ -1242,6 +1389,8 @@ namespace SmartSembakoAssistant.Views
         {
             string invoiceName = TxtMappingInvoiceName.Text.Trim();
             string databaseProductName = TxtMappingDbName.Text.Trim();
+            string supplierKey = ConfigService.NormalizeOcrSupplierKey(GetComboValue(CmbMappingSupplier, "GLOBAL"));
+            string trustLevel = GetComboValue(CmbMappingStatus, "trusted");
 
             if (string.IsNullOrWhiteSpace(invoiceName))
             {
@@ -1256,80 +1405,148 @@ namespace SmartSembakoAssistant.Views
             }
 
             var existing = _ocrProductMappings.FirstOrDefault(mapping =>
-                string.Equals(mapping.InvoiceName, invoiceName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey), supplierKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ConfigService.NormalizeOcrName(mapping.InvoiceName), ConfigService.NormalizeOcrName(invoiceName), StringComparison.OrdinalIgnoreCase));
 
+            DateTime now = DateTime.Now;
             if (existing != null)
             {
+                existing.SupplierKey = supplierKey;
                 existing.DatabaseProductId = _selectedMappingProductId;
                 existing.DatabaseProductName = databaseProductName;
                 existing.InvoiceName = invoiceName;
-                DgProductMappings.Items.Refresh();
+                existing.NormalizedInvoiceName = ConfigService.NormalizeOcrName(invoiceName);
+                existing.Source = "manual";
+                existing.TrustLevel = trustLevel;
+                existing.UpdatedAt = now;
+                if (string.Equals(trustLevel, "trusted", StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.LastConfirmedAt = now;
+                }
             }
             else
             {
                 _ocrProductMappings.Add(new OcrProductMapping
                 {
+                    SupplierKey = supplierKey,
                     InvoiceName = invoiceName,
+                    NormalizedInvoiceName = ConfigService.NormalizeOcrName(invoiceName),
                     DatabaseProductId = _selectedMappingProductId,
-                    DatabaseProductName = databaseProductName
+                    DatabaseProductName = databaseProductName,
+                    Source = "manual",
+                    TrustLevel = trustLevel,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    LastConfirmedAt = string.Equals(trustLevel, "trusted", StringComparison.OrdinalIgnoreCase) ? now : null
                 });
             }
 
             PersistCurrentOcrMappings();
-            await _databaseService.UpsertProductAliasAsync(new ProductAliasEntry
+            if (string.Equals(trustLevel, "trusted", StringComparison.OrdinalIgnoreCase))
             {
-                AliasName = invoiceName,
-                ProductId = _selectedMappingProductId,
-                ProductName = databaseProductName,
-                Source = "config-mapping",
-                CreatedAt = DateTime.Now,
-                UpdatedAt = DateTime.Now
-            });
+                await _databaseService.UpsertProductAliasAsync(new ProductAliasEntry
+                {
+                    AliasName = invoiceName,
+                    ProductId = _selectedMappingProductId,
+                    ProductName = databaseProductName,
+                    Source = "config-mapping",
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+            }
+            await RefreshOcrMappingRegistryAsync();
             ClearMappingInputs();
             MarkDirty();
         }
 
         private async void BtnDeleteMapping_Click(object sender, RoutedEventArgs e)
         {
-            string? invoiceName = (sender as FrameworkElement)?.Tag?.ToString();
-            if (string.IsNullOrWhiteSpace(invoiceName))
+            if ((sender as FrameworkElement)?.Tag is not OcrMappingRegistryRow row)
             {
                 return;
             }
 
             var mapping = _ocrProductMappings.FirstOrDefault(item =>
-                string.Equals(item.InvoiceName, invoiceName, StringComparison.OrdinalIgnoreCase));
-            if (mapping == null)
+                string.Equals(ConfigService.NormalizeOcrSupplierKey(item.SupplierKey), ConfigService.NormalizeOcrSupplierKey(row.SupplierKey), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ConfigService.NormalizeOcrName(item.InvoiceName), ConfigService.NormalizeOcrName(row.InvoiceName), StringComparison.OrdinalIgnoreCase));
+            if (mapping != null)
             {
-                return;
+                _ocrProductMappings.Remove(mapping);
+                PersistCurrentOcrMappings();
             }
 
-            _ocrProductMappings.Remove(mapping);
-            PersistCurrentOcrMappings();
-            await _databaseService.DeleteProductAliasAsync(mapping.InvoiceName);
+            await _databaseService.DeleteProductAliasAsync(row.InvoiceName);
+            await RefreshOcrMappingRegistryAsync();
             MarkDirty();
         }
 
         private void BtnEditMapping_Click(object sender, RoutedEventArgs e)
         {
-            string? invoiceName = (sender as FrameworkElement)?.Tag?.ToString();
-            if (string.IsNullOrWhiteSpace(invoiceName))
+            if ((sender as FrameworkElement)?.Tag is not OcrMappingRegistryRow row)
             {
                 return;
             }
 
             var mapping = _ocrProductMappings.FirstOrDefault(item =>
-                string.Equals(item.InvoiceName, invoiceName, StringComparison.OrdinalIgnoreCase));
-            if (mapping == null)
+                string.Equals(ConfigService.NormalizeOcrSupplierKey(item.SupplierKey), ConfigService.NormalizeOcrSupplierKey(row.SupplierKey), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ConfigService.NormalizeOcrName(item.InvoiceName), ConfigService.NormalizeOcrName(row.InvoiceName), StringComparison.OrdinalIgnoreCase));
+
+            _selectedMappingProductId = mapping?.DatabaseProductId ?? row.DatabaseProductId;
+            TxtMappingInvoiceName.Text = mapping?.InvoiceName ?? row.InvoiceName;
+            TxtMappingDbName.Text = mapping?.DatabaseProductName ?? row.DatabaseProductName;
+            SelectComboItem(CmbMappingSupplier, ConfigService.NormalizeOcrSupplierKey(mapping?.SupplierKey ?? row.SupplierKey));
+            SelectComboItem(CmbMappingStatus, string.IsNullOrWhiteSpace(mapping?.TrustLevel) ? row.TrustLevel : mapping.TrustLevel);
+            TxtMappingInvoiceName.Focus();
+            TxtMappingInvoiceName.SelectAll();
+        }
+
+        private async void BtnBlockMapping_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.Tag is not OcrMappingRegistryRow row)
             {
                 return;
             }
 
-            _selectedMappingProductId = mapping.DatabaseProductId;
-            TxtMappingInvoiceName.Text = mapping.InvoiceName;
-            TxtMappingDbName.Text = mapping.DatabaseProductName;
-            TxtMappingInvoiceName.Focus();
-            TxtMappingInvoiceName.SelectAll();
+            string supplierKey = ConfigService.NormalizeOcrSupplierKey(row.SupplierKey);
+            var mapping = _ocrProductMappings.FirstOrDefault(item =>
+                string.Equals(ConfigService.NormalizeOcrSupplierKey(item.SupplierKey), supplierKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(ConfigService.NormalizeOcrName(item.InvoiceName), ConfigService.NormalizeOcrName(row.InvoiceName), StringComparison.OrdinalIgnoreCase));
+
+            if (mapping == null)
+            {
+                mapping = new OcrProductMapping
+                {
+                    SupplierKey = supplierKey,
+                    InvoiceName = row.InvoiceName,
+                    NormalizedInvoiceName = ConfigService.NormalizeOcrName(row.InvoiceName),
+                    DatabaseProductId = row.DatabaseProductId,
+                    DatabaseProductName = row.DatabaseProductName,
+                    Source = string.IsNullOrWhiteSpace(row.Source) ? "manual" : row.Source,
+                    CreatedAt = DateTime.Now
+                };
+                _ocrProductMappings.Add(mapping);
+            }
+
+            mapping.TrustLevel = "blocked";
+            mapping.UpdatedAt = DateTime.Now;
+            mapping.Note = "Blocked dari Settings UI agar tidak auto-valid ulang.";
+            PersistCurrentOcrMappings();
+            await _databaseService.DeleteProductAliasAsync(row.InvoiceName);
+            await RefreshOcrMappingRegistryAsync();
+            MarkDirty();
+        }
+
+        private async void BtnRefreshMappings_Click(object sender, RoutedEventArgs e)
+        {
+            BtnRefreshMappings.IsEnabled = false;
+            try
+            {
+                await RefreshOcrMappingRegistryAsync();
+            }
+            finally
+            {
+                BtnRefreshMappings.IsEnabled = ChkOcrEnabled.IsChecked == true;
+            }
         }
 
         private async void BtnSearchParentConversionProduct_Click(object sender, RoutedEventArgs e)
@@ -1570,16 +1787,25 @@ namespace SmartSembakoAssistant.Views
                     picker.SelectedProduct.Name ?? "",
                     $"Dokumen purchase: {result.DocumentNumber}");
 
+                string supplierKey = ConfigService.NormalizeOcrSupplierKey(queueItem.SupplierName);
                 _configService.AddOcrMapping(
                     queueItem.RawProductName,
                     picker.SelectedProduct.Id ?? "",
-                    picker.SelectedProduct.Name ?? "");
+                    picker.SelectedProduct.Name ?? "",
+                    supplierKey,
+                    "review-queue",
+                    "trusted",
+                    note: $"Resolved dari OCR Review Queue item {queueItem.Id}.");
                 UpsertOcrMappingInGrid(
                     queueItem.RawProductName,
                     picker.SelectedProduct.Id ?? "",
-                    picker.SelectedProduct.Name ?? "");
+                    picker.SelectedProduct.Name ?? "",
+                    supplierKey,
+                    "review-queue",
+                    "trusted");
                 ClearMappingInputs();
 
+                await RefreshOcrMappingRegistryAsync();
                 await RefreshOcrReviewQueueAsync();
                 ToastHelper.ShowSuccess("OCR Review", $"Item diproses ke dokumen {result.DocumentNumber}, alias disimpan, dan OCR mapping diperbarui.");
             }
