@@ -29,10 +29,13 @@ namespace SmartSembakoAssistant.Views
         private readonly ObservableCollection<OcrMappingRegistryRow> _ocrMappingRegistryRows = new();
         private readonly ObservableCollection<OcrReviewQueueItem> _ocrReviewQueueItems = new();
         private readonly ObservableCollection<UnitConversionMapping> _unitConversionMappings = new();
+        private readonly ObservableCollection<SharedStockGroupRow> _sharedStockGroupRows = new();
         private string? _selectedMappingProductId;
         private string? _selectedUnitConversionId;
         private string? _selectedParentConversionProductId;
         private string? _selectedChildConversionProductId;
+        private string? _selectedSharedStockPrimaryProductId;
+        private string? _selectedSharedStockSecondProductId;
 
         private sealed class OcrMappingRegistryRow
         {
@@ -47,6 +50,17 @@ namespace SmartSembakoAssistant.Views
             public string Origin => IsRuntimeAlias ? "Alias DB" : "JSON";
         }
 
+        private sealed class SharedStockGroupRow
+        {
+            public string GroupId { get; set; } = "";
+            public string GroupName { get; set; } = "";
+            public bool IsEnabled { get; set; }
+            public string MembersSummary { get; set; } = "";
+            public string StockSummary { get; set; } = "";
+            public string StatusText { get; set; } = "";
+            public string ToggleText => IsEnabled ? "Nonaktif" : "Aktifkan";
+        }
+
         public SettingsView(ConfigService configService, PosDbService? posDbService = null)
         {
             InitializeComponent();
@@ -57,6 +71,7 @@ namespace SmartSembakoAssistant.Views
             DgProductMappings.ItemsSource = _ocrMappingRegistryRows;
             DgOcrReviewQueue.ItemsSource = _ocrReviewQueueItems;
             DgUnitConversions.ItemsSource = _unitConversionMappings;
+            DgSharedStock.ItemsSource = _sharedStockGroupRows;
 
             WireDirtyTracking();
             LoadSettings();
@@ -65,6 +80,7 @@ namespace SmartSembakoAssistant.Views
                 await RefreshOcrMappingRegistryAsync();
                 await RefreshOcrReviewQueueAsync();
                 await RefreshUnitConversionsAsync();
+                await RefreshSharedStockGroupsAsync();
             };
         }
 
@@ -369,6 +385,15 @@ namespace SmartSembakoAssistant.Views
             BtnAddUnitConversion.IsEnabled = ocrEnabled;
             BtnRefreshUnitConversions.IsEnabled = ocrEnabled;
             DgUnitConversions.IsEnabled = ocrEnabled;
+            bool sharedStockReady = _posDbService != null;
+            TxtSharedStockGroupName.IsEnabled = sharedStockReady;
+            TxtSharedStockPrimaryName.IsEnabled = sharedStockReady;
+            TxtSharedStockSecondName.IsEnabled = sharedStockReady;
+            BtnSearchSharedStockPrimary.IsEnabled = sharedStockReady;
+            BtnSearchSharedStockSecond.IsEnabled = sharedStockReady;
+            BtnAddSharedStock.IsEnabled = sharedStockReady;
+            BtnRefreshSharedStock.IsEnabled = sharedStockReady;
+            DgSharedStock.IsEnabled = sharedStockReady;
 
             bool sheetsEnabled = ChkSheetsEnabled.IsChecked == true;
             TxtSheetsCredentialPath.IsEnabled = sheetsEnabled;
@@ -1003,6 +1028,15 @@ namespace SmartSembakoAssistant.Views
             TxtConversionRate.Text = string.Empty;
         }
 
+        private void ClearSharedStockInputs()
+        {
+            _selectedSharedStockPrimaryProductId = null;
+            _selectedSharedStockSecondProductId = null;
+            TxtSharedStockGroupName.Text = string.Empty;
+            TxtSharedStockPrimaryName.Text = string.Empty;
+            TxtSharedStockSecondName.Text = string.Empty;
+        }
+
         private async Task RefreshUnitConversionsAsync()
         {
             try
@@ -1022,6 +1056,47 @@ namespace SmartSembakoAssistant.Views
             catch (Exception ex)
             {
                 TxtUnitConversionStatus.Text = $"Gagal memuat unit conversion: {ex.Message}";
+            }
+        }
+
+        private async Task RefreshSharedStockGroupsAsync()
+        {
+            try
+            {
+                var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: true);
+                _sharedStockGroupRows.Clear();
+                foreach (var group in groups)
+                {
+                    var stockParts = new List<string>();
+                    var stockValues = new List<decimal>();
+                    foreach (var member in group.Members)
+                    {
+                        Product? product = _posDbService == null ? null : await _posDbService.GetProductByIdAsync(member.ProductId);
+                        decimal stock = product?.Stock ?? 0;
+                        stockValues.Add(stock);
+                        string primary = member.IsPrimary ? "*" : string.Empty;
+                        stockParts.Add($"{primary}{member.ProductName ?? product?.Name ?? member.ProductId}: {stock:N2}");
+                    }
+
+                    bool mismatch = stockValues.Distinct().Count() > 1;
+                    _sharedStockGroupRows.Add(new SharedStockGroupRow
+                    {
+                        GroupId = group.Id,
+                        GroupName = group.GroupName,
+                        IsEnabled = group.IsEnabled,
+                        MembersSummary = string.Join(" | ", group.Members.Select(member => $"{(member.IsPrimary ? "*" : "")}{member.ProductName ?? member.ProductId}")),
+                        StockSummary = string.Join(" | ", stockParts),
+                        StatusText = !group.IsEnabled ? "Nonaktif" : mismatch ? "Mismatch" : "Sinkron"
+                    });
+                }
+
+                TxtSharedStockStatus.Text = groups.Count == 0
+                    ? "Belum ada shared stock group."
+                    : $"{groups.Count} shared stock group terdaftar.";
+            }
+            catch (Exception ex)
+            {
+                TxtSharedStockStatus.Text = $"Gagal memuat shared stock: {ex.Message}";
             }
         }
 
@@ -1059,6 +1134,107 @@ namespace SmartSembakoAssistant.Views
                     TxtConversionChildName.Text = picker.SelectedProduct.Name ?? string.Empty;
                 }
             }
+        }
+
+        private async Task SearchSharedStockProductAsync(bool isPrimary)
+        {
+            if (_posDbService == null)
+            {
+                ToastHelper.ShowError("Shared Stock", "Database pos.db belum siap untuk pencarian produk.");
+                return;
+            }
+
+            var products = await _posDbService.GetAllProductsAsync();
+            if (!products.Any())
+            {
+                ToastHelper.ShowError("Shared Stock", "Tidak ada produk yang bisa dipilih dari database.");
+                return;
+            }
+
+            string seed = isPrimary ? TxtSharedStockPrimaryName.Text.Trim() : TxtSharedStockSecondName.Text.Trim();
+            var picker = new ProductSearchWindow(products, seed)
+            {
+                Owner = Window.GetWindow(this)
+            };
+
+            if (picker.ShowDialog() == true && picker.SelectedProduct != null)
+            {
+                if (isPrimary)
+                {
+                    _selectedSharedStockPrimaryProductId = picker.SelectedProduct.Id;
+                    TxtSharedStockPrimaryName.Text = picker.SelectedProduct.Name ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(TxtSharedStockGroupName.Text))
+                    {
+                        TxtSharedStockGroupName.Text = picker.SelectedProduct.Name ?? string.Empty;
+                    }
+                }
+                else
+                {
+                    _selectedSharedStockSecondProductId = picker.SelectedProduct.Id;
+                    TxtSharedStockSecondName.Text = picker.SelectedProduct.Name ?? string.Empty;
+                }
+            }
+        }
+
+        private async Task SyncSharedStockGroupAsync(string groupId, bool useLargestStock)
+        {
+            if (_posDbService == null || string.IsNullOrWhiteSpace(groupId))
+            {
+                return;
+            }
+
+            var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: false);
+            var group = groups.FirstOrDefault(item => string.Equals(item.Id, groupId, StringComparison.OrdinalIgnoreCase));
+            if (group == null)
+            {
+                ToastHelper.ShowWarning("Shared Stock", "Group tidak ditemukan atau sedang nonaktif.");
+                return;
+            }
+
+            var memberProducts = new List<(SharedStockGroupMember Member, Product? Product)>();
+            foreach (var member in group.Members)
+            {
+                memberProducts.Add((member, await _posDbService.GetProductByIdAsync(member.ProductId)));
+            }
+
+            var source = useLargestStock
+                ? memberProducts.OrderByDescending(item => item.Product?.Stock ?? 0).FirstOrDefault()
+                : memberProducts.FirstOrDefault(item => item.Member.IsPrimary);
+            if (string.IsNullOrWhiteSpace(source.Member?.ProductId))
+            {
+                source = memberProducts.FirstOrDefault();
+            }
+
+            if (string.IsNullOrWhiteSpace(source.Member?.ProductId))
+            {
+                ToastHelper.ShowWarning("Shared Stock", "Group belum punya member valid.");
+                return;
+            }
+
+            decimal targetStock = source.Product?.Stock ?? 0;
+            int successCount = 0;
+            foreach (var item in memberProducts.Where(item => !string.Equals(item.Member.ProductId, source.Member.ProductId, StringComparison.OrdinalIgnoreCase)))
+            {
+                decimal currentStock = item.Product?.Stock ?? 0;
+                decimal delta = targetStock - currentStock;
+                if (Math.Abs(delta) < 0.0001m)
+                {
+                    successCount++;
+                    continue;
+                }
+
+                string note = $"SSA SharedStock: group={group.Id}; source={source.Member.ProductId}; target={item.Member.ProductId}; action=set; trigger=-; reason=settings sync";
+                var result = await _posDbService.AdjustStockAllowNegativeAsync(item.Member.ProductId, delta, internalNote: note);
+                if (result.Success)
+                {
+                    successCount++;
+                }
+            }
+
+            await RefreshSharedStockGroupsAsync();
+            ToastHelper.ShowSuccess(
+                "Shared Stock",
+                $"Sync {group.GroupName} selesai dari {source.Product?.Name ?? source.Member.ProductName} = {targetStock:N2}. Target sukses {successCount}/{Math.Max(0, memberProducts.Count - 1)}.");
         }
 
         private async Task ApplyShadowConversionFromSettingsAsync(
@@ -1130,9 +1306,14 @@ namespace SmartSembakoAssistant.Views
                 await RefreshUnitConversionsAsync();
             }
 
-            decimal effectiveRate = isiPerBox.GetValueOrDefault() > 0
-                ? isiPerBox!.Value
-                : conversion.ConversionRate;
+            decimal effectiveRate = conversion.ConversionRate;
+            if (isiPerBox.GetValueOrDefault() > 0 &&
+                Math.Abs(isiPerBox!.Value - effectiveRate) >= 0.0001m)
+            {
+                await _loggingService.LogWarningAsync(
+                    $"IsiPerBox OCR diabaikan dari Settings shadow conversion: parent={parentProductId} ({parentProductName}), OCR={isiPerBox.Value}, DB ConversionRate={effectiveRate}.",
+                    "OCR");
+            }
             if (effectiveRate <= 0)
             {
                 return;
@@ -1188,9 +1369,32 @@ namespace SmartSembakoAssistant.Views
                 return;
             }
 
+            string masterCostStatus = string.Empty;
+            if (hasChildUnitCost)
+            {
+                if (updateMasterCost)
+                {
+                    var childAfterAdjust = await _posDbService.GetProductByIdAsync(conversion.ChildProductId);
+                    decimal verifiedCost = childAfterAdjust?.PurchasePrice ?? 0;
+                    if (Math.Abs(verifiedCost - childUnitCostValue) >= 0.01m)
+                    {
+                        ToastHelper.ShowWarning(
+                            "Shadow Conversion",
+                            $"+{childQuantity:N2} {conversion.ChildProductName ?? conversion.ChildProductId} ditambahkan, tetapi verifikasi master modal child gagal. DB sekarang Rp {verifiedCost:N0}, target Rp {childUnitCostValue:N0}.");
+                        return;
+                    }
+
+                    masterCostStatus = " | master modal child diupdate";
+                }
+                else
+                {
+                    masterCostStatus = " | dokumen shadow memakai modal baru, master tidak diubah";
+                }
+            }
+
             ToastHelper.ShowSuccess(
                 "Shadow Conversion",
-                $"+{childQuantity:N2} {conversion.ChildProductName ?? conversion.ChildProductId} ditambahkan dari {(isiPerBox.GetValueOrDefault() > 0 ? "isi invoice" : "mapping")} {conversion.ParentProductName ?? parentProductId}{(hasChildUnitCost ? $" | modal child Rp {childUnitCostValue:N0} (total Rp {(childUnitCostValue * childQuantity):N0})" : string.Empty)}.");
+                $"+{childQuantity:N2} {conversion.ChildProductName ?? conversion.ChildProductId} ditambahkan dari mapping DB {conversion.ParentProductName ?? parentProductId}{(hasChildUnitCost ? $" | modal child Rp {childUnitCostValue:N0} (total Rp {(childUnitCostValue * childQuantity):N0}){masterCostStatus}" : string.Empty)}.");
         }
 
         private bool ConfirmOcrReviewResolution(OcrReviewQueueItem queueItem, Product selectedProduct)
@@ -1601,6 +1805,27 @@ namespace SmartSembakoAssistant.Views
 
             try
             {
+                if (_posDbService != null && Math.Abs(conversionRate - 1) < 0.0001m)
+                {
+                    var parent = await _posDbService.GetProductByIdAsync(_selectedParentConversionProductId);
+                    var child = await _posDbService.GetProductByIdAsync(_selectedChildConversionProductId);
+                    if (!string.IsNullOrWhiteSpace(parent?.Unit) &&
+                        !string.IsNullOrWhiteSpace(child?.Unit) &&
+                        string.Equals(parent.Unit.Trim(), child.Unit.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        var confirmSameUnit = MessageBox.Show(
+                            Window.GetWindow(this),
+                            "Mapping ini terlihat seperti SKU harga berbeda, bukan parent-child berbeda satuan.\n\nUntuk sementara mapping tetap bisa disimpan, tetapi lebih disarankan memakai Shared Stock.\n\nTetap simpan Unit Conversion?",
+                            "Warning Unit Conversion",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Warning);
+                        if (confirmSameUnit != MessageBoxResult.Yes)
+                        {
+                            return;
+                        }
+                    }
+                }
+
                 await _databaseService.UpsertUnitConversionAsync(new UnitConversionMapping
                 {
                     Id = string.IsNullOrWhiteSpace(_selectedUnitConversionId) ? Guid.NewGuid().ToString("N") : _selectedUnitConversionId,
@@ -1680,6 +1905,217 @@ namespace SmartSembakoAssistant.Views
             finally
             {
                 BtnRefreshUnitConversions.IsEnabled = true;
+            }
+        }
+
+        private async void BtnRefreshSharedStock_Click(object sender, RoutedEventArgs e)
+        {
+            BtnRefreshSharedStock.IsEnabled = false;
+            try
+            {
+                await RefreshSharedStockGroupsAsync();
+            }
+            finally
+            {
+                BtnRefreshSharedStock.IsEnabled = _posDbService != null;
+            }
+        }
+
+        private async void BtnSearchSharedStockPrimary_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await SearchSharedStockProductAsync(isPrimary: true);
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+        }
+
+        private async void BtnSearchSharedStockSecond_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await SearchSharedStockProductAsync(isPrimary: false);
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+        }
+
+        private async void BtnAddSharedStock_Click(object sender, RoutedEventArgs e)
+        {
+            if (_posDbService == null)
+            {
+                ToastHelper.ShowError("Shared Stock", "Database pos.db belum siap.");
+                return;
+            }
+
+            string groupName = TxtSharedStockGroupName.Text.Trim();
+            if (string.IsNullOrWhiteSpace(groupName))
+            {
+                ToastHelper.ShowError("Shared Stock", "Isi nama group terlebih dahulu.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_selectedSharedStockPrimaryProductId) ||
+                string.IsNullOrWhiteSpace(_selectedSharedStockSecondProductId))
+            {
+                ToastHelper.ShowError("Shared Stock", "Pilih primary dan member terlebih dahulu.");
+                return;
+            }
+
+            if (string.Equals(_selectedSharedStockPrimaryProductId, _selectedSharedStockSecondProductId, StringComparison.OrdinalIgnoreCase))
+            {
+                ToastHelper.ShowError("Shared Stock", "Primary dan member tidak boleh produk yang sama.");
+                return;
+            }
+
+            try
+            {
+                var primary = await _posDbService.GetProductByIdAsync(_selectedSharedStockPrimaryProductId);
+                var second = await _posDbService.GetProductByIdAsync(_selectedSharedStockSecondProductId);
+                if (primary == null || second == null)
+                {
+                    ToastHelper.ShowError("Shared Stock", "Produk shared stock tidak ditemukan di pos.db.");
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(primary.Unit) &&
+                    !string.IsNullOrWhiteSpace(second.Unit) &&
+                    !string.Equals(primary.Unit.Trim(), second.Unit.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    var confirmDifferentUnit = MessageBox.Show(
+                        Window.GetWindow(this),
+                        $"Unit produk berbeda.\n\nPrimary: {primary.Name} ({primary.Unit})\nMember: {second.Name} ({second.Unit})\n\nShared Stock fase awal hanya aman untuk unit fisik sama. Tetap simpan?",
+                        "Warning Shared Stock",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning);
+                    if (confirmDifferentUnit != MessageBoxResult.Yes)
+                    {
+                        return;
+                    }
+                }
+
+                await _databaseService.UpsertSharedStockGroupAsync(new SharedStockGroup
+                {
+                    GroupName = groupName,
+                    Notes = "Created from Settings UI",
+                    Members = new List<SharedStockGroupMember>
+                    {
+                        new()
+                        {
+                            ProductId = primary.Id ?? string.Empty,
+                            ProductName = primary.Name,
+                            Ratio = 1,
+                            IsPrimary = true
+                        },
+                        new()
+                        {
+                            ProductId = second.Id ?? string.Empty,
+                            ProductName = second.Name,
+                            Ratio = 1,
+                            IsPrimary = false
+                        }
+                    }
+                });
+
+                await RefreshSharedStockGroupsAsync();
+                ClearSharedStockInputs();
+                ToastHelper.ShowSuccess("Shared Stock", "Shared stock group disimpan.");
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+        }
+
+        private async void BtnSyncSharedStockPrimary_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await SyncSharedStockGroupAsync((sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty, useLargestStock: false);
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+        }
+
+        private async void BtnSyncSharedStockLargest_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await SyncSharedStockGroupAsync((sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty, useLargestStock: true);
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+        }
+
+        private async void BtnToggleSharedStock_Click(object sender, RoutedEventArgs e)
+        {
+            string groupId = (sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(groupId))
+            {
+                return;
+            }
+
+            try
+            {
+                var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: true);
+                var group = groups.FirstOrDefault(item => string.Equals(item.Id, groupId, StringComparison.OrdinalIgnoreCase));
+                if (group == null)
+                {
+                    return;
+                }
+
+                await _databaseService.SetSharedStockGroupEnabledAsync(group.Id, !group.IsEnabled);
+                await RefreshSharedStockGroupsAsync();
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+        }
+
+        private async void BtnDeleteSharedStock_Click(object sender, RoutedEventArgs e)
+        {
+            string groupId = (sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(groupId))
+            {
+                return;
+            }
+
+            try
+            {
+                var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: true);
+                var group = groups.FirstOrDefault(item => string.Equals(item.Id, groupId, StringComparison.OrdinalIgnoreCase));
+                if (group == null)
+                {
+                    return;
+                }
+
+                var confirm = MessageBox.Show(
+                    Window.GetWindow(this),
+                    $"Hapus shared stock \"{group.GroupName}\"?\n\nStok produk tidak akan diubah, hanya relasi mirror yang dihapus.",
+                    "Hapus Shared Stock",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (confirm != MessageBoxResult.Yes)
+                {
+                    return;
+                }
+
+                await _databaseService.DeleteSharedStockGroupAsync(group.Id);
+                await RefreshSharedStockGroupsAsync();
+            }
+            catch (Exception ex)
+            {
+                ToastHelper.ShowError("Shared Stock", ex.Message);
             }
         }
 
@@ -1764,6 +2200,46 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
+                string parentModalStatus = string.Empty;
+                if (price > 0)
+                {
+                    decimal oldParentCost = picker.SelectedProduct.PurchasePrice ?? 0;
+                    bool shouldPromptParentCost = oldParentCost <= 0 ||
+                        (Math.Abs(price - oldParentCost) >= 1 && oldParentCost > 0 && Math.Abs((price - oldParentCost) / oldParentCost * 100) >= 1);
+
+                    if (shouldPromptParentCost)
+                    {
+                        var confirmParentCost = MessageBox.Show(
+                            Window.GetWindow(this),
+                            $"Modal parent berubah.\n\nProduk: {picker.SelectedProduct.Name ?? picker.SelectedProduct.Id}\nModal DB lama: Rp {oldParentCost:N0}\nModal baru: Rp {price:N0}\n\nUpdate master modal produk parent?",
+                            "Konfirmasi Modal Parent",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Question);
+
+                        if (confirmParentCost == MessageBoxResult.Yes)
+                        {
+                            bool updated = await _posDbService.UpdateProductPricingAsync(picker.SelectedProduct.Id ?? "", price, null);
+                            var parentAfterUpdate = await _posDbService.GetProductByIdAsync(picker.SelectedProduct.Id ?? "");
+                            decimal verifiedParentCost = parentAfterUpdate?.PurchasePrice ?? 0;
+                            if (!updated || Math.Abs(verifiedParentCost - price) >= 0.01m)
+                            {
+                                ToastHelper.ShowWarning(
+                                    "OCR Review",
+                                    $"Dokumen {result.DocumentNumber} dibuat, tetapi update master modal parent belum terverifikasi. DB sekarang Rp {verifiedParentCost:N0}, target Rp {price:N0}.");
+                                parentModalStatus = " Modal parent belum terverifikasi.";
+                            }
+                            else
+                            {
+                                parentModalStatus = " Master modal parent diupdate.";
+                            }
+                        }
+                        else
+                        {
+                            parentModalStatus = " Master modal parent tidak diubah.";
+                        }
+                    }
+                }
+
                 await ApplyShadowConversionFromSettingsAsync(
                     picker.SelectedProduct.Id ?? "",
                     quantity,
@@ -1807,7 +2283,7 @@ namespace SmartSembakoAssistant.Views
 
                 await RefreshOcrMappingRegistryAsync();
                 await RefreshOcrReviewQueueAsync();
-                ToastHelper.ShowSuccess("OCR Review", $"Item diproses ke dokumen {result.DocumentNumber}, alias disimpan, dan OCR mapping diperbarui.");
+                ToastHelper.ShowSuccess("OCR Review", $"Item diproses ke dokumen {result.DocumentNumber}, alias disimpan, dan OCR mapping diperbarui.{parentModalStatus}");
             }
             catch (Exception ex)
             {

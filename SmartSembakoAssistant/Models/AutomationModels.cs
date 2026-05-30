@@ -248,6 +248,42 @@ namespace SmartSembakoAssistant.Models
         public DateTime UpdatedAt { get; set; } = DateTime.Now;
     }
 
+    public class SharedStockGroup
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string GroupName { get; set; } = "";
+        public string Mode { get; set; } = "Mirror";
+        public bool IsEnabled { get; set; } = true;
+        public string? Notes { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
+        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        public List<SharedStockGroupMember> Members { get; set; } = new();
+    }
+
+    public class SharedStockGroupMember
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string GroupId { get; set; } = "";
+        public string ProductId { get; set; } = "";
+        public string? ProductName { get; set; }
+        public string Role { get; set; } = "Member";
+        public decimal Ratio { get; set; } = 1;
+        public bool IsPrimary { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
+        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+    }
+
+    public class SharedStockSyncResult
+    {
+        public string ProductId { get; set; } = "";
+        public string? ProductName { get; set; }
+        public decimal? OldStock { get; set; }
+        public decimal? NewStock { get; set; }
+        public decimal? Delta { get; set; }
+        public bool Success { get; set; }
+        public string? Message { get; set; }
+    }
+
     public enum StockUnitIntent
     {
         General,

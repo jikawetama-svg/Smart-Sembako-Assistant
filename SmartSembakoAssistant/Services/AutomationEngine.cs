@@ -291,6 +291,7 @@ namespace SmartSembakoAssistant.Services
         private const string StateLegacyLastDualStockWatcherDocumentId = "automation.dual_stock_watcher.last_document_id";
         private const string StateLastDualStockDailySyncDate = "automation.dual_stock.last_daily_sync_date";
         private const string DualStockInternalNotePrefix = "SSA DualStock";
+        private const string SharedStockInternalNotePrefix = "SSA SharedStock";
         private const decimal InventoryLargeAdjustmentThreshold = 50m;
         private const decimal InventorySpikeMultiplier = 3m;
         private const float OcrVisionFallbackConfidenceThreshold = 0.62f;
@@ -845,8 +846,10 @@ namespace SmartSembakoAssistant.Services
                 try
                 {
                     DateTime documentTimestamp = first.Date.AddSeconds(1);
-                    if (!IsDualStockInternalMutation(first.InternalNote))
+                    if (!IsDualStockInternalMutation(first.InternalNote) && !IsSharedStockInternalMutation(first.InternalNote))
                     {
+                        await ApplySharedStockWatcherMutationAsync(documentGroup.ToList(), first);
+
                         var affectedMappings = documentGroup
                             .Select(item => FindMappingForProduct(mappings, item.ProductId))
                             .Where(mapping => mapping != null)
@@ -855,6 +858,7 @@ namespace SmartSembakoAssistant.Services
                             .Select(group => group.First())
                             .ToList();
 
+                        var plannedMutations = new List<DualStockPlannedMutation>();
                         foreach (var mapping in affectedMappings)
                         {
                             if (first.DocumentTypeId == 3)
@@ -874,16 +878,25 @@ namespace SmartSembakoAssistant.Services
                                 }
                             }
 
-                            string? alert = await EvaluateFamilyEquilibriumAsync(
+                            var planned = await PlanFamilyEquilibriumMutationAsync(
                                 mapping,
-                                documentTimestamp,
                                 "watcher equilibrium",
                                 first.DocumentId,
                                 mapping.Id);
-                            if (!string.IsNullOrWhiteSpace(alert))
+                            if (planned != null)
                             {
-                                outputs.AddRange(BuildDualStockAlertBroadcasts(alert, "DualStockWatcher"));
+                                plannedMutations.Add(planned);
                             }
+                        }
+
+                        var batch = await ApplyDualStockMutationBatchAsync(
+                            plannedMutations,
+                            documentTimestamp,
+                            "watcher equilibrium",
+                            first.DocumentId);
+                        foreach (string alert in batch.Alerts)
+                        {
+                            outputs.AddRange(BuildDualStockAlertBroadcasts(alert, "DualStockWatcher"));
                         }
                     }
                 }
@@ -1086,6 +1099,211 @@ namespace SmartSembakoAssistant.Services
                    internalNote.Contains("SSA shadow conversion", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsSharedStockInternalMutation(string? internalNote)
+        {
+            return internalNote?.Contains(SharedStockInternalNotePrefix, StringComparison.OrdinalIgnoreCase) == true;
+        }
+
+        private async Task ApplySharedStockWatcherMutationAsync(List<StockMutationDocument> documentGroup, StockMutationDocument first)
+        {
+            if (_posDbService == null)
+            {
+                return;
+            }
+
+            foreach (var mutation in documentGroup)
+            {
+                if (string.IsNullOrWhiteSpace(mutation.ProductId))
+                {
+                    continue;
+                }
+
+                if (first.DocumentTypeId == 2)
+                {
+                    decimal deltaQty = -Math.Abs(mutation.Quantity);
+                    if (deltaQty != 0)
+                    {
+                        await ApplySharedStockDeltaAsync(
+                            mutation.ProductId,
+                            deltaQty,
+                            "sales watcher",
+                            first.DocumentId);
+                    }
+                }
+                else if (first.DocumentTypeId == 3)
+                {
+                    await ApplySharedStockSetAsync(
+                        mutation.ProductId,
+                        mutation.Quantity,
+                        "inventory watcher",
+                        first.DocumentId);
+                }
+            }
+        }
+
+        private async Task<List<SharedStockSyncResult>> ApplySharedStockDeltaAsync(
+            string sourceProductId,
+            decimal deltaQty,
+            string reason,
+            long? triggerDocumentId = null)
+        {
+            var results = new List<SharedStockSyncResult>();
+            if (_posDbService == null || string.IsNullOrWhiteSpace(sourceProductId) || deltaQty == 0)
+            {
+                return results;
+            }
+
+            var group = await _databaseService.GetSharedStockGroupByProductIdAsync(sourceProductId);
+            if (group == null || !group.IsEnabled || group.Members.Count < 2)
+            {
+                return results;
+            }
+
+            foreach (var member in group.Members.Where(member =>
+                         !string.Equals(member.ProductId, sourceProductId, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (member.Ratio != 1)
+                {
+                    results.Add(new SharedStockSyncResult
+                    {
+                        ProductId = member.ProductId,
+                        ProductName = member.ProductName,
+                        Success = false,
+                        Message = "Ratio shared stock selain 1 dilewati."
+                    });
+                    continue;
+                }
+
+                if (triggerDocumentId.GetValueOrDefault() > 0 &&
+                    await _posDbService.HasSharedStockDocumentForTriggerAsync(triggerDocumentId.Value, group.Id, member.ProductId, "delta"))
+                {
+                    continue;
+                }
+
+                Product? before = await _posDbService.GetProductByIdAsync(member.ProductId);
+                string note = BuildSharedStockInternalNote(group.Id, sourceProductId, member.ProductId, "delta", triggerDocumentId, reason);
+                var adjust = await _posDbService.AdjustStockAllowNegativeAsync(member.ProductId, deltaQty, internalNote: note);
+                Product? after = adjust.Success ? await _posDbService.GetProductByIdAsync(member.ProductId) : null;
+
+                results.Add(new SharedStockSyncResult
+                {
+                    ProductId = member.ProductId,
+                    ProductName = member.ProductName ?? before?.Name,
+                    OldStock = before?.Stock,
+                    NewStock = after?.Stock,
+                    Delta = deltaQty,
+                    Success = adjust.Success,
+                    Message = adjust.Success ? null : adjust.Error
+                });
+            }
+
+            if (results.Any())
+            {
+                await _loggingService.LogInfoAsync(
+                    $"Shared stock delta {group.GroupName}: source={sourceProductId}, delta={deltaQty}, reason={reason}, success={results.Count(result => result.Success)}/{results.Count}.",
+                    "SharedStock");
+            }
+
+            return results;
+        }
+
+        private async Task<List<SharedStockSyncResult>> ApplySharedStockSetAsync(
+            string sourceProductId,
+            decimal targetStock,
+            string reason,
+            long? triggerDocumentId = null)
+        {
+            var results = new List<SharedStockSyncResult>();
+            if (_posDbService == null || string.IsNullOrWhiteSpace(sourceProductId))
+            {
+                return results;
+            }
+
+            var group = await _databaseService.GetSharedStockGroupByProductIdAsync(sourceProductId);
+            if (group == null || !group.IsEnabled || group.Members.Count < 2)
+            {
+                return results;
+            }
+
+            foreach (var member in group.Members.Where(member =>
+                         !string.Equals(member.ProductId, sourceProductId, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (member.Ratio != 1)
+                {
+                    results.Add(new SharedStockSyncResult
+                    {
+                        ProductId = member.ProductId,
+                        ProductName = member.ProductName,
+                        Success = false,
+                        Message = "Ratio shared stock selain 1 dilewati."
+                    });
+                    continue;
+                }
+
+                if (triggerDocumentId.GetValueOrDefault() > 0 &&
+                    await _posDbService.HasSharedStockDocumentForTriggerAsync(triggerDocumentId.Value, group.Id, member.ProductId, "set"))
+                {
+                    continue;
+                }
+
+                Product? before = await _posDbService.GetProductByIdAsync(member.ProductId);
+                decimal oldStock = before?.Stock ?? 0;
+                decimal delta = targetStock - oldStock;
+                if (Math.Abs(delta) < 0.0001m)
+                {
+                    results.Add(new SharedStockSyncResult
+                    {
+                        ProductId = member.ProductId,
+                        ProductName = member.ProductName ?? before?.Name,
+                        OldStock = oldStock,
+                        NewStock = oldStock,
+                        Delta = 0,
+                        Success = true,
+                        Message = "Stok sudah sama."
+                    });
+                    continue;
+                }
+
+                string note = BuildSharedStockInternalNote(group.Id, sourceProductId, member.ProductId, "set", triggerDocumentId, reason);
+                var adjust = await _posDbService.AdjustStockAllowNegativeAsync(member.ProductId, delta, internalNote: note);
+                Product? after = adjust.Success ? await _posDbService.GetProductByIdAsync(member.ProductId) : null;
+
+                results.Add(new SharedStockSyncResult
+                {
+                    ProductId = member.ProductId,
+                    ProductName = member.ProductName ?? before?.Name,
+                    OldStock = oldStock,
+                    NewStock = after?.Stock,
+                    Delta = delta,
+                    Success = adjust.Success,
+                    Message = adjust.Success ? null : adjust.Error
+                });
+            }
+
+            if (results.Any())
+            {
+                await _loggingService.LogInfoAsync(
+                    $"Shared stock set {group.GroupName}: source={sourceProductId}, target={targetStock}, reason={reason}, success={results.Count(result => result.Success)}/{results.Count}.",
+                    "SharedStock");
+            }
+
+            return results;
+        }
+
+        private static string BuildSharedStockInternalNote(
+            string groupId,
+            string sourceProductId,
+            string targetProductId,
+            string action,
+            long? triggerDocumentId,
+            string reason)
+        {
+            string trigger = triggerDocumentId.GetValueOrDefault() > 0
+                ? triggerDocumentId.Value.ToString(CultureInfo.InvariantCulture)
+                : "-";
+            return $"{SharedStockInternalNotePrefix}: group={groupId}; source={sourceProductId}; target={targetProductId}; action={action}; trigger={trigger}; reason={reason}";
+        }
+
         private async Task ReconcileCompanionMinusAsync(
             UnitConversionMapping mapping,
             string changedProductId,
@@ -1148,6 +1366,26 @@ namespace SmartSembakoAssistant.Services
             long? triggerDocumentId = null,
             string? triggerMappingId = null)
         {
+            var planned = await PlanFamilyEquilibriumMutationAsync(mapping, reason, triggerDocumentId, triggerMappingId);
+            if (planned == null)
+            {
+                return null;
+            }
+
+            var result = await ApplyDualStockMutationBatchAsync(
+                new[] { planned },
+                documentTimestamp,
+                reason,
+                triggerDocumentId);
+            return result.Alerts.FirstOrDefault();
+        }
+
+        private async Task<DualStockPlannedMutation?> PlanFamilyEquilibriumMutationAsync(
+            UnitConversionMapping mapping,
+            string reason = "watcher equilibrium",
+            long? triggerDocumentId = null,
+            string? triggerMappingId = null)
+        {
             if (_posDbService == null || mapping.ConversionRate <= 0)
             {
                 return null;
@@ -1193,42 +1431,28 @@ namespace SmartSembakoAssistant.Services
 
                 decimal targetParent = parentStock - breakQty;
                 decimal targetChild = childStock + breakQty * rate;
-                var result = await CreateDualStockInventoryDocumentAsync(
-                    new[]
+                string? alert = null;
+                decimal totalChild = targetParent * rate + targetChild;
+                if (targetParent < 0 || totalChild <= 0)
+                {
+                    alert = $"{IconWarning} Dual stock auto-break: {FormatOptional(mapping.FamilyName ?? parent.Name)} sekarang defisit. " +
+                            $"{FormatOptional(parent.Name)} {FormatStockValue(targetParent)} {GetUnitLabel(parent.Unit)}, " +
+                            $"{FormatOptional(child.Name)} {FormatStockValue(targetChild)} {GetUnitLabel(child.Unit)}. " +
+                            "Input restock atau lakukan opname fisik.";
+                }
+
+                return new DualStockPlannedMutation
+                {
+                    MappingId = mappingToken,
+                    Action = action,
+                    Description = $"auto-break {FormatStockValue(breakQty)} {GetUnitLabel(parent.Unit)} -> {FormatStockValue(breakQty * rate)} {GetUnitLabel(child.Unit)}",
+                    Targets =
                     {
                         new DualStockTarget(parent, targetParent),
                         new DualStockTarget(child, targetChild)
                     },
-                    AppendDualStockTriggerMetadata(
-                        $"{DualStockInternalNotePrefix}: auto-break {FormatStockValue(breakQty)} {GetUnitLabel(parent.Unit)} -> {FormatStockValue(breakQty * rate)} {GetUnitLabel(child.Unit)} | {reason}",
-                        triggerDocumentId,
-                        mappingToken,
-                        action),
-                    allowNegativeTargets: true,
-                    documentTimestamp: documentTimestamp);
-
-                if (!result.Success)
-                {
-                    await _loggingService.LogWarningAsync(
-                        $"Dual stock auto-break gagal untuk {mapping.ParentProductName}: {result.Error}",
-                        "DualStockWatcher");
-                    return null;
-                }
-
-                await _loggingService.LogInfoAsync(
-                    $"Dual stock auto-break: {parent.Name} {parentStock}->{targetParent}, {child.Name} {childStock}->{targetChild}.",
-                    "DualStockWatcher");
-
-                decimal totalChild = targetParent * rate + targetChild;
-                if (targetParent < 0 || totalChild <= 0)
-                {
-                    return $"{IconWarning} Dual stock auto-break: {FormatOptional(mapping.FamilyName ?? parent.Name)} sekarang defisit. " +
-                           $"{FormatOptional(parent.Name)} {FormatStockValue(targetParent)} {GetUnitLabel(parent.Unit)}, " +
-                           $"{FormatOptional(child.Name)} {FormatStockValue(targetChild)} {GetUnitLabel(child.Unit)}. " +
-                           "Input restock atau lakukan opname fisik.";
-                }
-
-                return null;
+                    Alert = alert
+                };
             }
 
             if (childStock >= rate)
@@ -1251,31 +1475,17 @@ namespace SmartSembakoAssistant.Services
 
                 decimal targetParent = parentStock + packQty;
                 decimal targetChild = childStock - packQty * rate;
-                var result = await CreateDualStockInventoryDocumentAsync(
-                    new[]
+                return new DualStockPlannedMutation
+                {
+                    MappingId = mappingToken,
+                    Action = action,
+                    Description = $"auto-pack {FormatStockValue(packQty * rate)} {GetUnitLabel(child.Unit)} -> {FormatStockValue(packQty)} {GetUnitLabel(parent.Unit)}",
+                    Targets =
                     {
                         new DualStockTarget(parent, targetParent),
                         new DualStockTarget(child, targetChild)
-                    },
-                    AppendDualStockTriggerMetadata(
-                        $"{DualStockInternalNotePrefix}: auto-pack {FormatStockValue(packQty * rate)} {GetUnitLabel(child.Unit)} -> {FormatStockValue(packQty)} {GetUnitLabel(parent.Unit)} | {reason}",
-                        triggerDocumentId,
-                        mappingToken,
-                        action),
-                    allowNegativeTargets: true,
-                    documentTimestamp: documentTimestamp);
-
-                if (!result.Success)
-                {
-                    await _loggingService.LogWarningAsync(
-                        $"Dual stock auto-pack gagal untuk {mapping.ParentProductName}: {result.Error}",
-                        "DualStockWatcher");
-                    return null;
-                }
-
-                await _loggingService.LogInfoAsync(
-                    $"Dual stock auto-pack: {parent.Name} {parentStock}->{targetParent}, {child.Name} {childStock}->{targetChild}.",
-                    "DualStockWatcher");
+                    }
+                };
             }
 
             return null;
@@ -1285,19 +1495,99 @@ namespace SmartSembakoAssistant.Services
         {
             var alerts = new List<string>();
             var mappings = await _databaseService.GetAllUnitConversionsAsync();
+            var plannedMutations = new List<DualStockPlannedMutation>();
             int processed = 0;
             foreach (var mapping in mappings.Where(mapping => mapping.ConversionRate > 0))
             {
-                string? alert = await EvaluateFamilyEquilibriumAsync(mapping, documentTimestamp, reason);
-                if (!string.IsNullOrWhiteSpace(alert))
+                var planned = await PlanFamilyEquilibriumMutationAsync(mapping, reason);
+                if (planned != null)
                 {
-                    alerts.Add(alert);
+                    plannedMutations.Add(planned);
                 }
 
                 processed++;
             }
 
+            var batch = await ApplyDualStockMutationBatchAsync(plannedMutations, documentTimestamp, reason);
+            alerts.AddRange(batch.Alerts);
+
             return new DualStockScanResult(processed, alerts);
+        }
+
+        private async Task<DualStockBatchApplyResult> ApplyDualStockMutationBatchAsync(
+            IEnumerable<DualStockPlannedMutation> plannedMutations,
+            DateTime? documentTimestamp,
+            string reason,
+            long? triggerDocumentId = null)
+        {
+            var plans = plannedMutations?.ToList() ?? new List<DualStockPlannedMutation>();
+            var alerts = plans
+                .Select(plan => plan.Alert)
+                .Where(alert => !string.IsNullOrWhiteSpace(alert))
+                .Cast<string>()
+                .ToList();
+            if (!plans.Any())
+            {
+                return new DualStockBatchApplyResult(false, alerts, null);
+            }
+
+            var targets = new List<DualStockTarget>();
+            foreach (var plan in plans)
+            {
+                foreach (var target in plan.Targets)
+                {
+                    string? productId = target.Product.Id;
+                    if (string.IsNullOrWhiteSpace(productId))
+                    {
+                        continue;
+                    }
+
+                    var existingIndex = targets.FindIndex(existing =>
+                        string.Equals(existing.Product.Id, productId, StringComparison.OrdinalIgnoreCase));
+                    if (existingIndex >= 0)
+                    {
+                        if (Math.Abs(targets[existingIndex].TargetStock - target.TargetStock) >= 0.0001m)
+                        {
+                            string conflict = $"Dual stock batch konflik target untuk {target.Product.Name ?? productId}: {FormatStockValue(targets[existingIndex].TargetStock)} vs {FormatStockValue(target.TargetStock)}.";
+                            alerts.Add($"{IconWarning} {conflict}");
+                            await _loggingService.LogWarningAsync(conflict, "DualStockWatcher");
+                            return new DualStockBatchApplyResult(false, alerts, conflict);
+                        }
+
+                        continue;
+                    }
+
+                    targets.Add(target);
+                }
+            }
+
+            if (!targets.Any())
+            {
+                return new DualStockBatchApplyResult(false, alerts, "Tidak ada target dual stock valid.");
+            }
+
+            string internalNote = BuildDualStockBatchInternalNote(plans, reason, triggerDocumentId);
+            var result = await CreateDualStockInventoryDocumentAsync(
+                targets,
+                internalNote,
+                allowNegativeTargets: true,
+                documentTimestamp: documentTimestamp);
+
+            if (!result.Success)
+            {
+                string error = result.Error ?? "Batch dual stock gagal.";
+                await _loggingService.LogWarningAsync(
+                    $"Dual stock batch gagal reason={reason}: {error}",
+                    "DualStockWatcher");
+                alerts.Add($"{IconWarning} Dual stock batch gagal: {error}");
+                return new DualStockBatchApplyResult(false, alerts, error);
+            }
+
+            await _loggingService.LogInfoAsync(
+                $"Dual stock batch dibuat: doc={result.DocumentNumber}, plans={plans.Count}, targets={targets.Count}, reason={reason}.",
+                "DualStockWatcher");
+
+            return new DualStockBatchApplyResult(true, alerts, null);
         }
 
         private async Task<bool> IsDuplicateDualStockTriggerAsync(long? triggerDocumentId, string? mappingId, string action)
@@ -1324,7 +1614,27 @@ namespace SmartSembakoAssistant.Services
                 return internalNote;
             }
 
-            return $"{internalNote} | trigger={triggerDocumentId.Value} | map={mappingId} | action={action}";
+            return $"{internalNote} | trigger={triggerDocumentId.Value} | map={mappingId} | action={action} | pair={BuildDualStockPairToken(mappingId, action)}";
+        }
+
+        private static string BuildDualStockBatchInternalNote(
+            IEnumerable<DualStockPlannedMutation> plans,
+            string reason,
+            long? triggerDocumentId)
+        {
+            var list = plans.ToList();
+            string descriptions = string.Join("; ", list.Select(plan => plan.Description).Where(value => !string.IsNullOrWhiteSpace(value)));
+            string pairs = string.Join(" | ", list.Select(plan => $"pair={BuildDualStockPairToken(plan.MappingId, plan.Action)}"));
+            string trigger = triggerDocumentId.GetValueOrDefault() > 0
+                ? $" | trigger={triggerDocumentId.Value}"
+                : string.Empty;
+            string maps = string.Join(",", list.Select(plan => $"{plan.MappingId}:{plan.Action}"));
+            return $"{DualStockInternalNotePrefix}: batch auto equilibrium | reason={reason} | maps={maps}{trigger} | {pairs} | {descriptions}";
+        }
+
+        private static string BuildDualStockPairToken(string mappingId, string action)
+        {
+            return $"{mappingId}:{action}";
         }
 
         private async Task<BulkDocumentResult> CreateDualStockInventoryDocumentAsync(
@@ -1373,7 +1683,17 @@ namespace SmartSembakoAssistant.Services
 
         private sealed record DualStockCatchUpDecision(DateTime DocumentTimestamp, bool HasNewerMutations, string Reason);
         private sealed record DualStockScanResult(int Processed, List<string> Alerts);
+        private sealed record DualStockBatchApplyResult(bool Success, List<string> Alerts, string? Error);
         private sealed record DualStockTarget(Product Product, decimal TargetStock);
+
+        private sealed class DualStockPlannedMutation
+        {
+            public string MappingId { get; set; } = "";
+            public string Action { get; set; } = "";
+            public string Description { get; set; } = "";
+            public List<DualStockTarget> Targets { get; set; } = new();
+            public string? Alert { get; set; }
+        }
 
         public async Task<long> EnqueueOutboundMessageAsync(OutboundMessage outbound)
         {
@@ -1882,6 +2202,10 @@ namespace SmartSembakoAssistant.Services
                 "/dual_stock_sync" => context.IsOwner ? await HandleDualStockSyncCommandAsync() : "Akses ditolak. Fitur dual stock sync hanya untuk owner.",
                 "/dual_stock_watcher" => context.IsOwner ? HandleDualStockWatcherCommand(args) : "Akses ditolak. Fitur dual stock watcher hanya untuk owner.",
                 "/dual_stock_channel" => context.IsOwner ? HandleDualStockChannelCommand(args) : "Akses ditolak. Fitur dual stock channel hanya untuk owner.",
+                "/set_shared_stock" => context.IsOwner ? await HandleSetSharedStockCommandAsync(args) : "Akses ditolak. Fitur shared stock hanya untuk owner.",
+                "/list_shared_stock" => context.IsOwner ? await HandleListSharedStockCommandAsync(args) : "Akses ditolak. Fitur shared stock hanya untuk owner.",
+                "/hapus_shared_stock" => context.IsOwner ? await HandleDeleteSharedStockCommandAsync(args) : "Akses ditolak. Fitur shared stock hanya untuk owner.",
+                "/sync_shared_stock" => context.IsOwner ? await HandleSyncSharedStockCommandAsync(args) : "Akses ditolak. Fitur shared stock hanya untuk owner.",
                 "/set_family" => context.IsOwner ? await HandleSetFamilyFlexibleAsync(args, context) : "Akses ditolak. Fitur set family hanya untuk owner.",
                 "/hapus_family" => context.IsOwner ? await HandleDeleteFamilyAsync(args) : "Akses ditolak. Fitur hapus family hanya untuk owner.",
                 "/riwayat_restock" => CanUseOperationalFeatures(context) ? await HandleRestockHistoryAsync(args) : "Akses ditolak. Fitur riwayat restock hanya untuk owner/kasir.",
@@ -3409,13 +3733,21 @@ namespace SmartSembakoAssistant.Services
                 Timestamp = DateTime.Now
             });
 
-            return BuildInventorySuccessMessage(
+            var inventoryMessage = new StringBuilder();
+            inventoryMessage.Append(BuildInventorySuccessMessage(
                 inventoryResult.DocumentNumber,
                 pending.ProductName,
                 product?.Unit,
                 currentStock,
                 inventoryResult.NewStock,
-                adjustment);
+                adjustment));
+            var sharedStockResults = await ApplySharedStockSetAsync(
+                pending.ProductId,
+                inventoryResult.NewStock,
+                $"inventory {inventoryResult.DocumentNumber}",
+                inventoryResult.DocumentId);
+            AppendSharedStockSyncSummary(inventoryMessage, sharedStockResults);
+            return inventoryMessage.ToString();
         }
 
         private async Task<string> ExecuteSingleRestockAsync(
@@ -3463,6 +3795,12 @@ namespace SmartSembakoAssistant.Services
                 return $"Restock gagal: {result.Error}";
             }
 
+            var sharedStockResults = await ApplySharedStockDeltaAsync(
+                pending.ProductId,
+                pending.Quantity,
+                $"single restock {result.DocumentNumber}",
+                result.DocumentId);
+
             await ApplyMasterPriceOverridesAsync(pricePayload, decision);
 
             var messageText = new StringBuilder();
@@ -3473,6 +3811,7 @@ namespace SmartSembakoAssistant.Services
                 pending.Quantity,
                 result.Total));
 
+            AppendSharedStockSyncSummary(messageText, sharedStockResults);
             AppendPriceOverrideSummary(messageText, pricePayload, decision);
             await AppendUnpromptedPurchaseCostNotesAsync(messageText, new[]
             {
@@ -4064,12 +4403,23 @@ namespace SmartSembakoAssistant.Services
                 return $"Bulk restock gagal: {result.Error}";
             }
 
+            var sharedStockResults = new List<SharedStockSyncResult>();
+            foreach (var item in items)
+            {
+                sharedStockResults.AddRange(await ApplySharedStockDeltaAsync(
+                    item.ProductId,
+                    item.Quantity,
+                    $"manual restock {result.DocumentNumber}",
+                    result.DocumentId));
+            }
+
             var shadowConversionResults = await ApplyShadowConversionAsync(items, pricePayload, decision);
             await ApplyMasterPriceOverridesAsync(pricePayload, decision);
 
             var successMessage = new StringBuilder();
             successMessage.Append(BuildBulkRestockSuccessMessage(result.DocumentNumber, result.Items));
             AppendDebtErasureSummary(successMessage, debtErasureResult);
+            AppendSharedStockSyncSummary(successMessage, sharedStockResults);
             AppendShadowConversionSummary(successMessage, shadowConversionResults);
             AppendPriceOverrideSummary(successMessage, pricePayload, decision);
             await AppendUnpromptedPurchaseCostNotesAsync(successMessage, items, pricePayload, decision);
@@ -4153,12 +4503,23 @@ namespace SmartSembakoAssistant.Services
             }
 
             PersistConfirmedOcrMappings(payload.Items, supplierName);
+            var sharedStockResults = new List<SharedStockSyncResult>();
+            foreach (var item in payload.Items)
+            {
+                sharedStockResults.AddRange(await ApplySharedStockDeltaAsync(
+                    item.ProductId,
+                    item.Quantity,
+                    $"OCR restock {result.DocumentNumber}",
+                    result.DocumentId));
+            }
+
             var shadowConversionResults = await ApplyShadowConversionAsync(payload.Items, pricePayload, decision);
             await ApplyMasterPriceOverridesAsync(pricePayload, decision);
 
             var sb = new StringBuilder();
             sb.AppendLine(BuildBulkRestockSuccessMessage(result.DocumentNumber, result.Items));
             AppendDebtErasureSummary(sb, debtErasureResult);
+            AppendSharedStockSyncSummary(sb, sharedStockResults);
             AppendPriceOverrideSummary(sb, pricePayload, decision);
             await AppendUnpromptedPurchaseCostNotesAsync(sb, payload.Items, pricePayload, decision);
 
@@ -4248,9 +4609,8 @@ namespace SmartSembakoAssistant.Services
                     continue;
                 }
 
-                decimal effectiveRate = item.IsiPerBox.GetValueOrDefault() > 0
-                    ? item.IsiPerBox!.Value
-                    : conversion.ConversionRate;
+                decimal effectiveRate = conversion.ConversionRate;
+                await LogIgnoredInvoiceIsiPerBoxAsync(item.ProductId, item.ProductName, item.IsiPerBox, effectiveRate, "price-preview");
                 decimal? childUnitCost = CalculateShadowChildUnitCost(item.Price, effectiveRate);
                 if (childUnitCost.GetValueOrDefault() <= 0)
                 {
@@ -4688,6 +5048,30 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
+        private static void AppendSharedStockSyncSummary(StringBuilder sb, IEnumerable<SharedStockSyncResult> results)
+        {
+            var list = results?.ToList() ?? new List<SharedStockSyncResult>();
+            if (!list.Any())
+            {
+                return;
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Shared stock:");
+            foreach (var result in list.Take(10))
+            {
+                string productName = FormatOptional(result.ProductName ?? result.ProductId);
+                if (result.Success)
+                {
+                    sb.AppendLine($"- {productName}: {FormatStockValue(result.OldStock ?? 0)} -> {FormatStockValue(result.NewStock ?? 0)}");
+                }
+                else
+                {
+                    sb.AppendLine($"- {productName}: gagal ({result.Message ?? "error"})");
+                }
+            }
+        }
+
         private async Task AppendUnpromptedPurchaseCostNotesAsync(
             StringBuilder sb,
             IEnumerable<BulkPendingItem> items,
@@ -4824,7 +5208,20 @@ namespace SmartSembakoAssistant.Services
                 });
             }
 
-            return BuildBulkInventorySuccessMessage(result.DocumentNumber, result.Items);
+            var sharedStockResults = new List<SharedStockSyncResult>();
+            foreach (var item in result.Items)
+            {
+                sharedStockResults.AddRange(await ApplySharedStockSetAsync(
+                    item.ProductId.ToString(CultureInfo.InvariantCulture),
+                    item.NewStock,
+                    $"bulk inventory {result.DocumentNumber}",
+                    result.DocumentId));
+            }
+
+            var messageText = new StringBuilder();
+            messageText.Append(BuildBulkInventorySuccessMessage(result.DocumentNumber, result.Items));
+            AppendSharedStockSyncSummary(messageText, sharedStockResults);
+            return messageText.ToString();
 
             var lines = result.Items
                 .Take(10)
@@ -5661,7 +6058,245 @@ namespace SmartSembakoAssistant.Services
                 UpdatedAt = DateTime.Now
             });
 
-            return $"{IconCheck} Mapping disimpan: 1 {FormatOptional(parent.Name)} = {FormatStockValue(rate)} {FormatOptional(child.Name)}. Shadow stock hanya untuk analisa dan tidak mengubah Aronium.";
+            string warning = IsSameUnitRatioOneMapping(parent, child, rate)
+                ? $"\n\n{IconWarning} Mapping ini terlihat seperti SKU harga berbeda dengan unit sama dan ratio 1. Lebih aman dipindahkan ke Shared Stock agar tidak dianggap parent-child."
+                : string.Empty;
+            return $"{IconCheck} Mapping disimpan: 1 {FormatOptional(parent.Name)} = {FormatStockValue(rate)} {FormatOptional(child.Name)}. Shadow stock hanya untuk analisa dan tidak mengubah Aronium.{warning}";
+        }
+
+        private static bool IsSameUnitRatioOneMapping(Product parent, Product child, decimal rate)
+        {
+            if (Math.Abs(rate - 1) > 0.0001m)
+            {
+                return false;
+            }
+
+            string parentUnit = NormalizeReceiptUnit(parent.Unit ?? string.Empty);
+            string childUnit = NormalizeReceiptUnit(child.Unit ?? string.Empty);
+            return !string.IsNullOrWhiteSpace(parentUnit) &&
+                   !string.IsNullOrWhiteSpace(childUnit) &&
+                   string.Equals(parentUnit, childUnit, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task<string> HandleSetSharedStockCommandAsync(string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            string source = args.Trim();
+            var match = Regex.Match(source, @"^(?<members>.+?)(?:\s+as\s+(?<name>.+))?$", RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                return "Format: /set_shared_stock produk A + produk B as Nama Group";
+            }
+
+            string groupName = match.Groups["name"].Success
+                ? match.Groups["name"].Value.Trim()
+                : string.Empty;
+            var memberQueries = match.Groups["members"].Value
+                .Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .ToList();
+
+            if (memberQueries.Count < 2)
+            {
+                return "Shared stock minimal butuh 2 produk. Contoh: /set_shared_stock AleAle @1dus + ale-ale 1dus as AleAle Sirsak Dus";
+            }
+
+            var products = new List<Product>();
+            foreach (string query in memberQueries)
+            {
+                var resolved = await ResolveProductAsync(query);
+                if (resolved.BestMatch == null || resolved.IsAmbiguous)
+                {
+                    string candidates = resolved.Candidates.Any()
+                        ? "\nKandidat:\n" + string.Join("\n", resolved.Candidates.Take(5).Select((candidate, index) => $"{index + 1}. {candidate.Product.Name} (ID {candidate.Product.Id})"))
+                        : string.Empty;
+                    return $"Produk \"{query}\" belum bisa dipilih otomatis. {resolved.Reason}{candidates}";
+                }
+
+                products.Add(resolved.BestMatch);
+            }
+
+            var uniqueProducts = products
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .GroupBy(product => product.Id!, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+            if (uniqueProducts.Count < 2)
+            {
+                return "Produk shared stock harus berbeda.";
+            }
+
+            groupName = string.IsNullOrWhiteSpace(groupName)
+                ? string.Join(" + ", uniqueProducts.Take(2).Select(product => product.Name ?? product.Id))
+                : groupName;
+
+            var group = new SharedStockGroup
+            {
+                GroupName = groupName,
+                Notes = "Created via /set_shared_stock",
+                Members = uniqueProducts.Select((product, index) => new SharedStockGroupMember
+                {
+                    ProductId = product.Id ?? string.Empty,
+                    ProductName = product.Name,
+                    Ratio = 1,
+                    IsPrimary = index == 0
+                }).ToList()
+            };
+
+            await _databaseService.UpsertSharedStockGroupAsync(group);
+
+            var conversions = await _databaseService.GetAllUnitConversionsAsync();
+            var conflicts = uniqueProducts
+                .Where(product => conversions.Any(mapping =>
+                    string.Equals(mapping.ParentProductId, product.Id, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(mapping.ChildProductId, product.Id, StringComparison.OrdinalIgnoreCase)))
+                .Select(product => product.Name ?? product.Id)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{IconCheck} Shared stock disimpan: {groupName}");
+            foreach (var product in uniqueProducts)
+            {
+                sb.AppendLine($"- {product.Name} (ID {product.Id}) stok {FormatStockValue(product.Stock ?? 0)} {GetUnitLabel(product.Unit)}");
+            }
+
+            if (conflicts.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{IconWarning} Warning: produk ini juga ada di Unit Conversion: {string.Join(", ", conflicts)}. Hindari memakai dua mekanisme untuk relasi fisik yang sama.");
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleListSharedStockCommandAsync(string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: true);
+            if (!groups.Any())
+            {
+                return "Belum ada SharedStockGroup.";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("Shared stock group:");
+            foreach (var group in groups)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"- {group.GroupName} ({(group.IsEnabled ? "aktif" : "nonaktif")})");
+                foreach (var member in group.Members)
+                {
+                    var product = await _posDbService.GetProductByIdAsync(member.ProductId);
+                    string primary = member.IsPrimary ? " | primary" : string.Empty;
+                    sb.AppendLine($"  {FormatOptional(member.ProductName ?? product?.Name ?? member.ProductId)}: {FormatStockValue(product?.Stock ?? 0)} {GetUnitLabel(product?.Unit)}{primary}");
+                }
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleDeleteSharedStockCommandAsync(string args)
+        {
+            var group = await FindSharedStockGroupByNameAsync(args.Trim(), includeDisabled: true);
+            if (group == null)
+            {
+                return "Shared stock group tidak ditemukan.";
+            }
+
+            await _databaseService.DeleteSharedStockGroupAsync(group.Id);
+            return $"{IconCheck} Shared stock \"{group.GroupName}\" dihapus.";
+        }
+
+        private async Task<string> HandleSyncSharedStockCommandAsync(string args)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            string source = args.Trim();
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                return "Format: /sync_shared_stock <nama group> primary|largest\nContoh: /sync_shared_stock AleAle Sirsak Dus primary";
+            }
+
+            string mode = "show";
+            string groupQuery = source;
+            foreach (string suffix in new[] { " primary", " utama", " largest", " terbesar" })
+            {
+                if (source.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    mode = suffix.Trim().ToLowerInvariant() is "largest" or "terbesar" ? "largest" : "primary";
+                    groupQuery = source[..^suffix.Length].Trim();
+                    break;
+                }
+            }
+
+            var group = await FindSharedStockGroupByNameAsync(groupQuery, includeDisabled: false);
+            if (group == null)
+            {
+                return "Shared stock group tidak ditemukan atau nonaktif.";
+            }
+
+            var memberProducts = new List<(SharedStockGroupMember Member, Product? Product)>();
+            foreach (var member in group.Members)
+            {
+                memberProducts.Add((member, await _posDbService.GetProductByIdAsync(member.ProductId)));
+            }
+
+            if (mode == "show")
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"Shared stock \"{group.GroupName}\" belum disinkronkan karena sumber kebenaran belum dipilih.");
+                foreach (var item in memberProducts)
+                {
+                    sb.AppendLine($"- {FormatOptional(item.Member.ProductName ?? item.Product?.Name ?? item.Member.ProductId)}: {FormatStockValue(item.Product?.Stock ?? 0)} {GetUnitLabel(item.Product?.Unit)}");
+                }
+
+                sb.AppendLine();
+                sb.AppendLine($"Gunakan: /sync_shared_stock {group.GroupName} primary");
+                sb.AppendLine($"Atau: /sync_shared_stock {group.GroupName} largest");
+                return sb.ToString().TrimEnd();
+            }
+
+            var sourceMember = mode == "largest"
+                ? memberProducts.OrderByDescending(item => item.Product?.Stock ?? 0).FirstOrDefault()
+                : memberProducts.FirstOrDefault(item => item.Member.IsPrimary);
+            if (string.IsNullOrWhiteSpace(sourceMember.Member?.ProductId))
+            {
+                sourceMember = memberProducts.FirstOrDefault();
+            }
+
+            decimal targetStock = sourceMember.Product?.Stock ?? 0;
+            var results = await ApplySharedStockSetAsync(sourceMember.Member.ProductId, targetStock, $"manual sync {group.GroupName}");
+
+            var output = new StringBuilder();
+            output.AppendLine($"{IconCheck} Shared stock \"{group.GroupName}\" disinkronkan dari {FormatOptional(sourceMember.Product?.Name ?? sourceMember.Member.ProductName)} = {FormatStockValue(targetStock)}.");
+            AppendSharedStockSyncSummary(output, results);
+            return output.ToString().TrimEnd();
+        }
+
+        private async Task<SharedStockGroup?> FindSharedStockGroupByNameAsync(string query, bool includeDisabled)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return null;
+            }
+
+            string normalized = NormalizeText(query);
+            var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled);
+            return groups.FirstOrDefault(group => string.Equals(group.Id, query, StringComparison.OrdinalIgnoreCase)) ??
+                   groups.FirstOrDefault(group => string.Equals(NormalizeText(group.GroupName), normalized, StringComparison.OrdinalIgnoreCase)) ??
+                   groups.FirstOrDefault(group => NormalizeText(group.GroupName).Contains(normalized, StringComparison.OrdinalIgnoreCase));
         }
 
         private async Task<string> HandleShadowMappingIntentAsync(
@@ -15467,12 +16102,11 @@ namespace SmartSembakoAssistant.Services
             if (conversion != null &&
                 !string.Equals(conversion.ParentProductId, conversion.ChildProductId, StringComparison.OrdinalIgnoreCase))
             {
-                effectiveConversionRate = item.IsiPerBox.GetValueOrDefault() > 0
-                    ? item.IsiPerBox!.Value
-                    : conversion.ConversionRate;
-                rateSource = item.IsiPerBox.GetValueOrDefault() > 0 ? "invoice-isi" : "db-mapping";
+                effectiveConversionRate = conversion.ConversionRate;
+                rateSource = "db-mapping";
                 childProductId = conversion.ChildProductId;
                 childProductName = conversion.ChildProductName ?? conversion.ChildProductId;
+                await LogIgnoredInvoiceIsiPerBoxAsync(item.ProductId, item.ProductName, item.IsiPerBox, effectiveConversionRate, "shadow-execution");
             }
             else if (item.IsiPerBox.GetValueOrDefault() > 0)
             {
@@ -15592,6 +16226,28 @@ namespace SmartSembakoAssistant.Services
             }
 
             return Math.Round(parentUnitCost!.Value / conversionRate, 2, MidpointRounding.AwayFromZero);
+        }
+
+        private async Task LogIgnoredInvoiceIsiPerBoxAsync(
+            string parentProductId,
+            string? parentProductName,
+            int? isiPerBox,
+            decimal dbRate,
+            string source)
+        {
+            if (isiPerBox.GetValueOrDefault() <= 0 || dbRate <= 0)
+            {
+                return;
+            }
+
+            if (Math.Abs(isiPerBox!.Value - dbRate) < 0.0001m)
+            {
+                return;
+            }
+
+            await _loggingService.LogWarningAsync(
+                $"IsiPerBox OCR diabaikan untuk {parentProductId} ({parentProductName}) pada {source}: OCR={isiPerBox.Value}, DB ConversionRate={dbRate}.",
+                "OCR");
         }
 
         private static string? BuildShadowMasterCostStatus(

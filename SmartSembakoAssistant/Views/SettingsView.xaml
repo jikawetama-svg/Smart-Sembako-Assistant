@@ -693,6 +693,73 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
+                            <TextBlock Text="Shared Stock" FontSize="14" FontWeight="SemiBold" Foreground="#047857"/>
+                            <TextBlock Text="Mirror stok untuk beberapa SKU yang mewakili barang fisik sama dengan unit sama. Stok tidak dijumlahkan antar member." Style="{StaticResource HelpTextStyle}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <Button x:Name="BtnRefreshSharedStock" Grid.Column="1" Content="Refresh" Style="{StaticResource SmallButtonStyle}" Click="BtnRefreshSharedStock_Click"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.1*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtSharedStockGroupName" Grid.Column="0" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <TextBox x:Name="TxtSharedStockPrimaryName" Grid.Column="1" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <Button x:Name="BtnSearchSharedStockPrimary" Grid.Column="2" Content="Cari Primary" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnSearchSharedStockPrimary_Click"/>
+                        <TextBox x:Name="TxtSharedStockSecondName" Grid.Column="3" Style="{StaticResource InputStyle}" Margin="0,0,6,0"/>
+                        <Button x:Name="BtnSearchSharedStockSecond" Grid.Column="4" Content="Cari Member" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnSearchSharedStockSecond_Click"/>
+                        <Button x:Name="BtnAddSharedStock" Grid.Column="5" Content="+ Simpan" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnAddSharedStock_Click"/>
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Isi nama group, pilih primary sebagai sumber default, lalu pilih minimal satu member lain. Gunakan Sync Primary atau Sync Terbesar saat stok antar member sudah beda." Margin="0,0,0,8"/>
+
+                    <DataGrid x:Name="DgSharedStock"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              HeadersVisibility="Column"
+                              Height="190"
+                              FontSize="11"
+                              BorderBrush="#E5E7EB"
+                              BorderThickness="1"
+                              Margin="0,0,0,2">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Group" Width="170" Binding="{Binding GroupName}"/>
+                            <DataGridTextColumn Header="Members" Width="*" Binding="{Binding MembersSummary}"/>
+                            <DataGridTextColumn Header="Stok" Width="220" Binding="{Binding StockSummary}"/>
+                            <DataGridTextColumn Header="Status" Width="90" Binding="{Binding StatusText}"/>
+                            <DataGridTemplateColumn Header="" Width="300">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Sync Primary" Tag="{Binding GroupId}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnSyncSharedStockPrimary_Click"/>
+                                            <Button Content="Sync Terbesar" Tag="{Binding GroupId}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnSyncSharedStockLargest_Click"/>
+                                            <Button Content="{Binding ToggleText}" Tag="{Binding GroupId}" Style="{StaticResource SmallButtonStyle}" Margin="0,0,4,0" Click="BtnToggleSharedStock_Click"/>
+                                            <Button Content="Hapus" Tag="{Binding GroupId}" Style="{StaticResource SmallButtonStyle}" Click="BtnDeleteSharedStock_Click"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock x:Name="TxtSharedStockStatus" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
                             <TextBlock Text="OCR Review Queue" FontSize="14" FontWeight="SemiBold" Foreground="#B45309"/>
                             <TextBlock Text="Item OCR yang belum yakin akan masuk antrean ini. Pilih produk yang benar untuk membuat purchase document dan menyimpan alias belajar." Style="{StaticResource HelpTextStyle}" Margin="0,4,0,0"/>
                         </StackPanel>

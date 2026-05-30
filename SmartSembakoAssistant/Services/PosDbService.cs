@@ -3424,8 +3424,14 @@ namespace SmartSembakoAssistant.Services
                     WHERE d.DocumentTypeId = 3
                       AND instr(COALESCE(d.InternalNote, ''), @prefix) > 0
                       AND instr(COALESCE(d.InternalNote, ''), @triggerToken) > 0
-                      AND instr(COALESCE(d.InternalNote, ''), @mappingToken) > 0
-                      AND instr(COALESCE(d.InternalNote, ''), @actionToken) > 0
+                      AND (
+                            instr(COALESCE(d.InternalNote, ''), @pairToken) > 0
+                         OR (
+                                instr(COALESCE(d.InternalNote, ''), @batchMarker) = 0
+                            AND instr(COALESCE(d.InternalNote, ''), @mappingToken) > 0
+                            AND instr(COALESCE(d.InternalNote, ''), @actionToken) > 0
+                         )
+                      )
                     LIMIT 1";
 
                 using var command = new SqliteCommand(sql, connection);
@@ -3433,6 +3439,8 @@ namespace SmartSembakoAssistant.Services
                 command.Parameters.AddWithValue("@triggerToken", $"trigger={triggerDocumentId}");
                 command.Parameters.AddWithValue("@mappingToken", $"map={mappingId}");
                 command.Parameters.AddWithValue("@actionToken", $"action={action}");
+                command.Parameters.AddWithValue("@pairToken", $"pair={mappingId}:{action}");
+                command.Parameters.AddWithValue("@batchMarker", "batch auto equilibrium");
                 return await command.ExecuteScalarAsync() != null;
             }
             catch (Exception ex)
@@ -3441,6 +3449,59 @@ namespace SmartSembakoAssistant.Services
                 {
                     await _loggingService.LogErrorAsync(
                         $"Error checking dual stock trigger dedupe: {ex.Message}", "Database", ex.ToString());
+                }
+
+                return false;
+            }
+        }
+
+        public async Task<bool> HasSharedStockDocumentForTriggerAsync(long triggerDocumentId, string groupId, string targetProductId, string action)
+        {
+            if (triggerDocumentId <= 0 ||
+                string.IsNullOrWhiteSpace(groupId) ||
+                string.IsNullOrWhiteSpace(targetProductId) ||
+                string.IsNullOrWhiteSpace(action))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                if (string.IsNullOrEmpty(documentTable))
+                {
+                    return false;
+                }
+
+                string sql = $@"
+                    SELECT 1
+                    FROM {ValidateTableName(documentTable)} d
+                    WHERE d.DocumentTypeId = 3
+                      AND instr(COALESCE(d.InternalNote, ''), @prefix) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @triggerToken) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @groupToken) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @targetToken) > 0
+                      AND instr(COALESCE(d.InternalNote, ''), @actionToken) > 0
+                    LIMIT 1";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@prefix", "SSA SharedStock");
+                command.Parameters.AddWithValue("@triggerToken", $"trigger={triggerDocumentId}");
+                command.Parameters.AddWithValue("@groupToken", $"group={groupId}");
+                command.Parameters.AddWithValue("@targetToken", $"target={targetProductId}");
+                command.Parameters.AddWithValue("@actionToken", $"action={action}");
+                return await command.ExecuteScalarAsync() != null;
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error checking shared stock trigger dedupe: {ex.Message}", "Database", ex.ToString());
                 }
 
                 return false;

@@ -301,6 +301,31 @@ namespace SmartSembakoAssistant.Services
                         updated_at TEXT NOT NULL
                     )";
 
+                string createSharedStockGroupTable = @"
+                    CREATE TABLE IF NOT EXISTS SharedStockGroup (
+                        Id TEXT PRIMARY KEY,
+                        GroupName TEXT NOT NULL,
+                        Mode TEXT NOT NULL DEFAULT 'Mirror',
+                        IsEnabled INTEGER NOT NULL DEFAULT 1,
+                        Notes TEXT,
+                        CreatedAt TEXT NOT NULL,
+                        UpdatedAt TEXT NOT NULL
+                    )";
+
+                string createSharedStockGroupMemberTable = @"
+                    CREATE TABLE IF NOT EXISTS SharedStockGroupMember (
+                        Id TEXT PRIMARY KEY,
+                        GroupId TEXT NOT NULL,
+                        ProductId TEXT NOT NULL,
+                        ProductName TEXT,
+                        Role TEXT NOT NULL DEFAULT 'Member',
+                        Ratio REAL NOT NULL DEFAULT 1,
+                        IsPrimary INTEGER NOT NULL DEFAULT 0,
+                        CreatedAt TEXT NOT NULL,
+                        UpdatedAt TEXT NOT NULL,
+                        UNIQUE(GroupId, ProductId)
+                    )";
+
                 string createOcrSessionTable = @"
                     CREATE TABLE IF NOT EXISTS OcrSession (
                         Id TEXT PRIMARY KEY,
@@ -398,6 +423,16 @@ namespace SmartSembakoAssistant.Services
                     command.ExecuteNonQuery();
                 }
 
+                using (var command = new SqliteCommand(createSharedStockGroupTable, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+
+                using (var command = new SqliteCommand(createSharedStockGroupMemberTable, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+
                 using (var command = new SqliteCommand(createOcrSessionTable, connection))
                 {
                     command.ExecuteNonQuery();
@@ -461,6 +496,9 @@ namespace SmartSembakoAssistant.Services
                     "CREATE INDEX IF NOT EXISTS idx_ocr_review_queue_correlation ON ocr_review_queue(receipt_correlation_id)",
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_unit_conversion_parent ON unit_conversion_mappings(parent_product_id)",
                     "CREATE INDEX IF NOT EXISTS idx_unit_conversion_child ON unit_conversion_mappings(child_product_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_shared_stock_group_enabled ON SharedStockGroup(IsEnabled)",
+                    "CREATE INDEX IF NOT EXISTS idx_shared_stock_member_product ON SharedStockGroupMember(ProductId)",
+                    "CREATE INDEX IF NOT EXISTS idx_shared_stock_member_group ON SharedStockGroupMember(GroupId)",
                     "CREATE INDEX IF NOT EXISTS idx_ocr_session_sender_channel ON OcrSession(SenderId, Channel, IsComplete, ExpiresAt)"
                 };
 
@@ -607,6 +645,36 @@ namespace SmartSembakoAssistant.Services
                 Notes = reader.IsDBNull(7) ? null : reader.GetString(7),
                 CreatedAt = ParseDbTimestamp(reader.GetString(8)),
                 UpdatedAt = ParseDbTimestamp(reader.GetString(9))
+            };
+        }
+
+        private static SharedStockGroup ReadSharedStockGroup(SqliteDataReader reader)
+        {
+            return new SharedStockGroup
+            {
+                Id = reader.GetString(0),
+                GroupName = reader.GetString(1),
+                Mode = reader.IsDBNull(2) ? "Mirror" : reader.GetString(2),
+                IsEnabled = reader.IsDBNull(3) || reader.GetInt32(3) == 1,
+                Notes = reader.IsDBNull(4) ? null : reader.GetString(4),
+                CreatedAt = ParseDbTimestamp(reader.GetString(5)),
+                UpdatedAt = ParseDbTimestamp(reader.GetString(6))
+            };
+        }
+
+        private static SharedStockGroupMember ReadSharedStockGroupMember(SqliteDataReader reader)
+        {
+            return new SharedStockGroupMember
+            {
+                Id = reader.GetString(0),
+                GroupId = reader.GetString(1),
+                ProductId = reader.GetString(2),
+                ProductName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Role = reader.IsDBNull(4) ? "Member" : reader.GetString(4),
+                Ratio = reader.IsDBNull(5) ? 1 : reader.GetDecimal(5),
+                IsPrimary = !reader.IsDBNull(6) && reader.GetInt32(6) == 1,
+                CreatedAt = ParseDbTimestamp(reader.GetString(7)),
+                UpdatedAt = ParseDbTimestamp(reader.GetString(8))
             };
         }
 
@@ -2219,6 +2287,237 @@ namespace SmartSembakoAssistant.Services
             using var command = new SqliteCommand("DELETE FROM unit_conversion_mappings WHERE parent_product_id = @parent_product_id", connection);
             command.Parameters.AddWithValue("@parent_product_id", parentProductId.Trim());
             await command.ExecuteNonQueryAsync();
+        }
+
+        public async Task UpsertSharedStockGroupAsync(SharedStockGroup group)
+        {
+            if (group == null)
+            {
+                throw new ArgumentNullException(nameof(group));
+            }
+
+            if (string.IsNullOrWhiteSpace(group.GroupName))
+            {
+                throw new InvalidOperationException("GroupName wajib diisi.");
+            }
+
+            if (group.Members == null || group.Members.Count < 2)
+            {
+                throw new InvalidOperationException("Shared stock minimal membutuhkan 2 produk member.");
+            }
+
+            if (group.Members.Any(member => string.IsNullOrWhiteSpace(member.ProductId)))
+            {
+                throw new InvalidOperationException("Semua member shared stock wajib punya ProductId.");
+            }
+
+            if (group.Members.Any(member => member.Ratio != 1))
+            {
+                throw new InvalidOperationException("Shared stock fase awal hanya mendukung Ratio 1.");
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
+
+            string groupId = string.IsNullOrWhiteSpace(group.Id)
+                ? Guid.NewGuid().ToString("N")
+                : group.Id.Trim();
+            DateTime createdAt = group.CreatedAt == default ? DateTime.Now : group.CreatedAt;
+            DateTime updatedAt = DateTime.Now;
+
+            const string groupSql = @"
+                INSERT INTO SharedStockGroup (Id, GroupName, Mode, IsEnabled, Notes, CreatedAt, UpdatedAt)
+                VALUES (@Id, @GroupName, @Mode, @IsEnabled, @Notes, @CreatedAt, @UpdatedAt)
+                ON CONFLICT(Id) DO UPDATE SET
+                    GroupName = excluded.GroupName,
+                    Mode = excluded.Mode,
+                    IsEnabled = excluded.IsEnabled,
+                    Notes = excluded.Notes,
+                    UpdatedAt = excluded.UpdatedAt";
+
+            using (var command = new SqliteCommand(groupSql, connection, transaction))
+            {
+                command.Parameters.AddWithValue("@Id", groupId);
+                command.Parameters.AddWithValue("@GroupName", group.GroupName.Trim());
+                command.Parameters.AddWithValue("@Mode", string.IsNullOrWhiteSpace(group.Mode) ? "Mirror" : group.Mode.Trim());
+                command.Parameters.AddWithValue("@IsEnabled", group.IsEnabled ? 1 : 0);
+                command.Parameters.AddWithValue("@Notes", group.Notes ?? (object)DBNull.Value);
+                command.Parameters.AddWithValue("@CreatedAt", ToDbTimestamp(createdAt));
+                command.Parameters.AddWithValue("@UpdatedAt", ToDbTimestamp(updatedAt));
+                await command.ExecuteNonQueryAsync();
+            }
+
+            using (var deleteCommand = new SqliteCommand("DELETE FROM SharedStockGroupMember WHERE GroupId = @GroupId", connection, transaction))
+            {
+                deleteCommand.Parameters.AddWithValue("@GroupId", groupId);
+                await deleteCommand.ExecuteNonQueryAsync();
+            }
+
+            const string memberSql = @"
+                INSERT INTO SharedStockGroupMember (
+                    Id, GroupId, ProductId, ProductName, Role, Ratio, IsPrimary, CreatedAt, UpdatedAt
+                ) VALUES (
+                    @Id, @GroupId, @ProductId, @ProductName, @Role, @Ratio, @IsPrimary, @CreatedAt, @UpdatedAt
+                )";
+
+            bool hasPrimary = group.Members.Any(member => member.IsPrimary);
+            for (int i = 0; i < group.Members.Count; i++)
+            {
+                var member = group.Members[i];
+                using var memberCommand = new SqliteCommand(memberSql, connection, transaction);
+                memberCommand.Parameters.AddWithValue("@Id", string.IsNullOrWhiteSpace(member.Id) ? Guid.NewGuid().ToString("N") : member.Id.Trim());
+                memberCommand.Parameters.AddWithValue("@GroupId", groupId);
+                memberCommand.Parameters.AddWithValue("@ProductId", member.ProductId.Trim());
+                memberCommand.Parameters.AddWithValue("@ProductName", member.ProductName ?? (object)DBNull.Value);
+                memberCommand.Parameters.AddWithValue("@Role", string.IsNullOrWhiteSpace(member.Role) ? "Member" : member.Role.Trim());
+                memberCommand.Parameters.AddWithValue("@Ratio", 1);
+                memberCommand.Parameters.AddWithValue("@IsPrimary", member.IsPrimary || (!hasPrimary && i == 0) ? 1 : 0);
+                memberCommand.Parameters.AddWithValue("@CreatedAt", ToDbTimestamp(member.CreatedAt == default ? createdAt : member.CreatedAt));
+                memberCommand.Parameters.AddWithValue("@UpdatedAt", ToDbTimestamp(updatedAt));
+                await memberCommand.ExecuteNonQueryAsync();
+            }
+
+            transaction.Commit();
+        }
+
+        public async Task<List<SharedStockGroup>> GetAllSharedStockGroupsAsync(bool includeDisabled = false)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            string sql = @"
+                SELECT Id, GroupName, Mode, IsEnabled, Notes, CreatedAt, UpdatedAt
+                FROM SharedStockGroup";
+            if (!includeDisabled)
+            {
+                sql += " WHERE IsEnabled = 1";
+            }
+
+            sql += " ORDER BY GroupName COLLATE NOCASE";
+
+            using var command = new SqliteCommand(sql, connection);
+            var groups = new List<SharedStockGroup>();
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    groups.Add(ReadSharedStockGroup(reader));
+                }
+            }
+
+            foreach (var group in groups)
+            {
+                group.Members = await GetSharedStockMembersAsync(connection, group.Id);
+            }
+
+            return groups;
+        }
+
+        public async Task<SharedStockGroup?> GetSharedStockGroupByProductIdAsync(string productId)
+        {
+            if (string.IsNullOrWhiteSpace(productId))
+            {
+                return null;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            const string sql = @"
+                SELECT g.Id, g.GroupName, g.Mode, g.IsEnabled, g.Notes, g.CreatedAt, g.UpdatedAt
+                FROM SharedStockGroup g
+                INNER JOIN SharedStockGroupMember m ON m.GroupId = g.Id
+                WHERE m.ProductId = @ProductId
+                LIMIT 1";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@ProductId", productId.Trim());
+            SharedStockGroup? group = null;
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                if (await reader.ReadAsync())
+                {
+                    group = ReadSharedStockGroup(reader);
+                }
+            }
+
+            if (group == null)
+            {
+                return null;
+            }
+
+            group.Members = await GetSharedStockMembersAsync(connection, group.Id);
+            return group;
+        }
+
+        public async Task DeleteSharedStockGroupAsync(string groupId)
+        {
+            if (string.IsNullOrWhiteSpace(groupId))
+            {
+                return;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            using var transaction = connection.BeginTransaction();
+
+            using (var memberCommand = new SqliteCommand("DELETE FROM SharedStockGroupMember WHERE GroupId = @GroupId", connection, transaction))
+            {
+                memberCommand.Parameters.AddWithValue("@GroupId", groupId.Trim());
+                await memberCommand.ExecuteNonQueryAsync();
+            }
+
+            using (var groupCommand = new SqliteCommand("DELETE FROM SharedStockGroup WHERE Id = @GroupId", connection, transaction))
+            {
+                groupCommand.Parameters.AddWithValue("@GroupId", groupId.Trim());
+                await groupCommand.ExecuteNonQueryAsync();
+            }
+
+            transaction.Commit();
+        }
+
+        public async Task SetSharedStockGroupEnabledAsync(string groupId, bool enabled)
+        {
+            if (string.IsNullOrWhiteSpace(groupId))
+            {
+                return;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            const string sql = @"
+                UPDATE SharedStockGroup
+                SET IsEnabled = @IsEnabled,
+                    UpdatedAt = @UpdatedAt
+                WHERE Id = @Id";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@IsEnabled", enabled ? 1 : 0);
+            command.Parameters.AddWithValue("@UpdatedAt", ToDbTimestamp(DateTime.Now));
+            command.Parameters.AddWithValue("@Id", groupId.Trim());
+            await command.ExecuteNonQueryAsync();
+        }
+
+        private static async Task<List<SharedStockGroupMember>> GetSharedStockMembersAsync(SqliteConnection connection, string groupId)
+        {
+            const string sql = @"
+                SELECT Id, GroupId, ProductId, ProductName, Role, Ratio, IsPrimary, CreatedAt, UpdatedAt
+                FROM SharedStockGroupMember
+                WHERE GroupId = @GroupId
+                ORDER BY IsPrimary DESC, ProductName COLLATE NOCASE, ProductId";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@GroupId", groupId);
+            using var reader = await command.ExecuteReaderAsync();
+            var members = new List<SharedStockGroupMember>();
+            while (await reader.ReadAsync())
+            {
+                members.Add(ReadSharedStockGroupMember(reader));
+            }
+
+            return members;
         }
 
         public async Task SetRuntimeStateAsync(string key, string value)
