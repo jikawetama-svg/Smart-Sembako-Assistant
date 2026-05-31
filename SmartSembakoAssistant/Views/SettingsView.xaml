@@ -591,6 +591,56 @@
 
             <Border Style="{StaticResource SectionStyle}">
                 <StackPanel>
+                    <TextBlock Text="Mapping Transfer" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="#4338CA"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Export/import OCR mapping, alias runtime, unit conversion, dan shared stock. Import default Merge Safe hanya menerapkan item non-conflict."/>
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="170"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Import mode" VerticalAlignment="Center" FontSize="11" Margin="0,0,8,0" Foreground="#374151"/>
+                        <ComboBox x:Name="CmbMappingImportMode" Grid.Column="1" Style="{StaticResource ComboStyle}" SelectedIndex="0" Margin="0,0,8,0">
+                            <ComboBoxItem Content="Merge Safe"/>
+                            <ComboBoxItem Content="Import New Only"/>
+                            <ComboBoxItem Content="Overwrite Existing"/>
+                        </ComboBox>
+                        <Button x:Name="BtnExportMappingPackage" Grid.Column="2" Content="Export Package" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnExportMappingPackage_Click"/>
+                        <Button x:Name="BtnImportMappingPackage" Grid.Column="3" Content="Import Preview" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnImportMappingPackage_Click"/>
+                        <Button x:Name="BtnApplyMappingImport" Grid.Column="4" Content="Apply Non-Conflicts" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnApplyMappingImport_Click"/>
+                    </Grid>
+
+                    <DataGrid x:Name="DgMappingImportPreview"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              HeadersVisibility="Column"
+                              Height="170"
+                              FontSize="11"
+                              BorderBrush="#E5E7EB"
+                              BorderThickness="1"
+                              Margin="0,0,0,2">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Type" Width="105" Binding="{Binding Type}"/>
+                            <DataGridTextColumn Header="Key" Width="*" Binding="{Binding Key}"/>
+                            <DataGridTextColumn Header="Existing" Width="*" Binding="{Binding Existing}"/>
+                            <DataGridTextColumn Header="Import" Width="*" Binding="{Binding Import}"/>
+                            <DataGridTextColumn Header="Status" Width="85" Binding="{Binding Status}"/>
+                            <DataGridTextColumn Header="Action" Width="75" Binding="{Binding Action}"/>
+                            <DataGridTextColumn Header="Message" Width="220" Binding="{Binding Message}"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock x:Name="TxtMappingTransferStatus" Style="{StaticResource StatusTextStyle}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SectionStyle}">
+                <StackPanel>
                     <TextBlock Text="Google Sheets Export" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" Foreground="#0F766E"/>
 
                     <CheckBox x:Name="ChkSheetsEnabled" Content="Aktifkan export ke Google Sheets" Margin="0,0,0,8" Checked="ChkSheetsEnabled_Changed" Unchecked="ChkSheetsEnabled_Changed"/>

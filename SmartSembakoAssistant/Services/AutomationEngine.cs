@@ -1182,7 +1182,7 @@ namespace SmartSembakoAssistant.Services
 
                 Product? before = await _posDbService.GetProductByIdAsync(member.ProductId);
                 string note = BuildSharedStockInternalNote(group.Id, sourceProductId, member.ProductId, "delta", triggerDocumentId, reason);
-                var adjust = await _posDbService.AdjustStockAllowNegativeAsync(member.ProductId, deltaQty, internalNote: note);
+                var adjust = await _posDbService.AdjustStockAllowNegativeAsync(member.ProductId, deltaQty, internalNote: note, allowDisabledProducts: true);
                 Product? after = adjust.Success ? await _posDbService.GetProductByIdAsync(member.ProductId) : null;
 
                 results.Add(new SharedStockSyncResult
@@ -1265,7 +1265,7 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 string note = BuildSharedStockInternalNote(group.Id, sourceProductId, member.ProductId, "set", triggerDocumentId, reason);
-                var adjust = await _posDbService.AdjustStockAllowNegativeAsync(member.ProductId, delta, internalNote: note);
+                var adjust = await _posDbService.AdjustStockAllowNegativeAsync(member.ProductId, delta, internalNote: note, allowDisabledProducts: true);
                 Product? after = adjust.Success ? await _posDbService.GetProductByIdAsync(member.ProductId) : null;
 
                 results.Add(new SharedStockSyncResult
@@ -1678,7 +1678,8 @@ namespace SmartSembakoAssistant.Services
                 1,
                 internalNote,
                 allowNegativeTargets,
-                documentTimestamp);
+                documentTimestamp,
+                allowDisabledProducts: true);
         }
 
         private sealed record DualStockCatchUpDecision(DateTime DocumentTimestamp, bool HasNewerMutations, string Reason);
@@ -4495,7 +4496,8 @@ namespace SmartSembakoAssistant.Services
                 1,
                 BuildOcrPurchaseNote(message, payload),
                 supplierName,
-                supplierCustomerId);
+                supplierCustomerId,
+                allowDisabledProducts: true);
 
             if (!result.Success)
             {
@@ -16175,7 +16177,7 @@ namespace SmartSembakoAssistant.Services
                 ? $"SSA shadow conversion | Parent {item.ProductName} | {FormatStockValue(item.Quantity)} x {FormatStockValue(effectiveConversionRate)} -> {FormatStockValue(childQuantity)} {childProductName} | harga beli {FormatCurrency(childUnitCostValue)}"
                 : null;
             var adjustResult = hasChildUnitCost
-                ? await _posDbService.AdjustStockWithCostAsync(childProductId, childQuantity, childUnitCostValue, updateMasterCost: updateChildMasterCost, internalNote: internalNote)
+                ? await _posDbService.AdjustStockWithCostAsync(childProductId, childQuantity, childUnitCostValue, updateMasterCost: updateChildMasterCost, internalNote: internalNote, allowDisabledProducts: true)
                 : await _posDbService.AdjustStockAsync(childProductId, childQuantity);
             result.ChildProductId = childProductId;
             result.ChildProductName = childProductName;

@@ -72,9 +72,14 @@ namespace SmartSembakoAssistant.Services
             await _databaseService.AddLogAsync(logEntry);
         }
 
-        public async Task<List<LogEntry>> GetLogsAsync(string? category = null, string? level = null, int limit = 100)
+        public async Task<List<LogEntry>> GetLogsAsync(
+            string? category = null,
+            string? level = null,
+            int limit = 100,
+            long? beforeId = null,
+            CancellationToken cancellationToken = default)
         {
-            return await _databaseService.GetLogsAsync(category, level, limit);
+            return await _databaseService.GetLogsAsync(category, level, limit, beforeId, cancellationToken);
         }
 
         public async Task ExportLogsToCsvAsync(string filePath)
@@ -116,8 +121,17 @@ namespace SmartSembakoAssistant.Services
         /// </summary>
         public async Task<int> ClearOldLogsAsync(int daysOld)
         {
+            var result = await ClearOldLogsChunkedAsync(daysOld);
+            return result.DeletedCount;
+        }
+
+        public async Task<LogDeleteResult> ClearOldLogsChunkedAsync(
+            int daysOld,
+            IProgress<int>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
             var cutoffDate = DateTime.Now.AddDays(-daysOld);
-            return await _databaseService.DeleteLogsBeforeAsync(cutoffDate);
+            return await _databaseService.DeleteLogsBeforeChunkedAsync(cutoffDate, progress, cancellationToken: cancellationToken);
         }
 
         /// <summary>
@@ -125,7 +139,15 @@ namespace SmartSembakoAssistant.Services
         /// </summary>
         public async Task<int> ClearAllLogsAsync()
         {
-            return await _databaseService.DeleteAllLogsAsync();
+            var result = await ClearAllLogsChunkedAsync();
+            return result.DeletedCount;
+        }
+
+        public async Task<LogDeleteResult> ClearAllLogsChunkedAsync(
+            IProgress<int>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            return await _databaseService.DeleteAllLogsChunkedAsync(progress, cancellationToken: cancellationToken);
         }
     }
 }

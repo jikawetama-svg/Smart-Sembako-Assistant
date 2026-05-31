@@ -282,6 +282,7 @@ namespace SmartSembakoAssistant.Services
         private sealed class ValidatedProductData
         {
             public int ProductId { get; set; }
+            public bool IsEnabled { get; set; } = true;
             public decimal Cost { get; set; }
             public decimal Price { get; set; }
         }
@@ -3772,7 +3773,8 @@ namespace SmartSembakoAssistant.Services
         private static async Task<ValidatedProductData> LoadValidatedProductDataAsync(
             SqliteConnection connection,
             SqliteTransaction transaction,
-            int productId)
+            int productId,
+            bool allowDisabledProducts = false)
         {
             const string sql = "SELECT Id, IsEnabled, Cost, Price FROM Product WHERE Id = @id";
             using var command = new SqliteCommand(sql, connection, transaction);
@@ -3784,7 +3786,7 @@ namespace SmartSembakoAssistant.Services
             }
 
             bool isEnabled = reader.IsDBNull(1) || Convert.ToBoolean(reader[1]);
-            if (!isEnabled)
+            if (!isEnabled && !allowDisabledProducts)
             {
                 throw new InvalidOperationException($"Produk dengan ID {productId} tidak aktif (IsEnabled = 0). Pilih produk lain.");
             }
@@ -3792,6 +3794,7 @@ namespace SmartSembakoAssistant.Services
             return new ValidatedProductData
             {
                 ProductId = productId,
+                IsEnabled = isEnabled,
                 Cost = reader.IsDBNull(2) ? 0 : reader.GetDecimal(2),
                 Price = reader.IsDBNull(3) ? 0 : reader.GetDecimal(3)
             };
@@ -3914,7 +3917,8 @@ namespace SmartSembakoAssistant.Services
             decimal quantity,
             decimal price,
             int userId = 1,
-            string? note = null)
+            string? note = null,
+            bool allowDisabledProducts = false)
         {
             var result = new RestockResult { Success = false };
 
@@ -3945,7 +3949,7 @@ namespace SmartSembakoAssistant.Services
                     }
                     
                     bool isEnabled = productReader.IsDBNull(1) ? true : Convert.ToBoolean(productReader[1]);
-                    if (!isEnabled)
+                    if (!isEnabled && !allowDisabledProducts)
                     {
                         result.Error = $"Produk dengan ID {productId} tidak aktif (IsEnabled = 0). Pilih produk lain.";
                         return result;
@@ -4164,7 +4168,8 @@ namespace SmartSembakoAssistant.Services
             string? internalNoteOverride = null,
             bool updateMasterCost = true,
             bool allowNegativeTarget = false,
-            DateTime? documentDateOverride = null)
+            DateTime? documentDateOverride = null,
+            bool allowDisabledProducts = false)
         {
             var result = new RestockResult { Success = false };
 
@@ -4201,7 +4206,7 @@ namespace SmartSembakoAssistant.Services
                     }
 
                     bool isEnabled = productReader.IsDBNull(1) ? true : Convert.ToBoolean(productReader[1]);
-                    if (!isEnabled)
+                    if (!isEnabled && !allowDisabledProducts)
                     {
                         result.Error = $"Produk dengan ID {productId} tidak aktif (IsEnabled = 0). Pilih produk lain.";
                         return result;
@@ -4423,7 +4428,8 @@ namespace SmartSembakoAssistant.Services
             int userId = 1,
             string? note = null,
             string? supplierName = null,
-            int? supplierCustomerId = null)
+            int? supplierCustomerId = null,
+            bool allowDisabledProducts = false)
         {
             var result = new BulkDocumentResult { Success = false };
             if (items == null || items.Count == 0)
@@ -4462,7 +4468,7 @@ namespace SmartSembakoAssistant.Services
                             throw new InvalidOperationException($"Quantity restock untuk produk {item.ProductName} harus lebih dari 0.");
                         }
 
-                        var product = await LoadValidatedProductDataAsync(connection, transaction, item.ProductId);
+                        var product = await LoadValidatedProductDataAsync(connection, transaction, item.ProductId, allowDisabledProducts);
                         var stock = await GetStockSnapshotAsync(connection, transaction, item.ProductId, warehouseId);
                         validatedItems.Add((item, product, stock));
                     }
@@ -4574,7 +4580,8 @@ namespace SmartSembakoAssistant.Services
             int userId = 1,
             string? internalNoteOverride = null,
             bool allowNegativeTargets = false,
-            DateTime? documentDateOverride = null)
+            DateTime? documentDateOverride = null,
+            bool allowDisabledProducts = false)
         {
             var result = new BulkDocumentResult { Success = false };
             if (items == null || items.Count == 0)
@@ -4608,7 +4615,7 @@ namespace SmartSembakoAssistant.Services
                             throw new InvalidOperationException($"Target stok untuk produk {item.ProductName} tidak boleh negatif.");
                         }
 
-                        var product = await LoadValidatedProductDataAsync(connection, transaction, item.ProductId);
+                        var product = await LoadValidatedProductDataAsync(connection, transaction, item.ProductId, allowDisabledProducts);
                         var stock = await GetStockSnapshotAsync(connection, transaction, item.ProductId, warehouseId);
                         decimal currentStock = stock.Quantity;
                         decimal targetStock = item.Quantity;
@@ -6582,9 +6589,10 @@ namespace SmartSembakoAssistant.Services
             string productId,
             decimal adjustmentQty,
             int userId = 1,
-            string? internalNote = null)
+            string? internalNote = null,
+            bool allowDisabledProducts = false)
         {
-            return await AdjustStockInternalAsync(productId, adjustmentQty, null, userId, true, internalNote, allowNegativeTarget: true);
+            return await AdjustStockInternalAsync(productId, adjustmentQty, null, userId, true, internalNote, allowNegativeTarget: true, allowDisabledProducts: allowDisabledProducts);
         }
 
         public async Task<RestockResult> AdjustStockWithCostAsync(
@@ -6593,10 +6601,11 @@ namespace SmartSembakoAssistant.Services
             decimal unitCost,
             int userId = 1,
             bool updateMasterCost = true,
-            string? internalNote = null)
+            string? internalNote = null,
+            bool allowDisabledProducts = false)
         {
             decimal? costOverride = unitCost > 0 ? unitCost : null;
-            return await AdjustStockInternalAsync(productId, adjustmentQty, costOverride, userId, updateMasterCost, internalNote);
+            return await AdjustStockInternalAsync(productId, adjustmentQty, costOverride, userId, updateMasterCost, internalNote, allowDisabledProducts: allowDisabledProducts);
         }
 
         private async Task<RestockResult> AdjustStockInternalAsync(
@@ -6606,7 +6615,8 @@ namespace SmartSembakoAssistant.Services
             int userId = 1,
             bool updateMasterCost = true,
             string? internalNote = null,
-            bool allowNegativeTarget = false)
+            bool allowNegativeTarget = false,
+            bool allowDisabledProducts = false)
         {
             if (string.IsNullOrWhiteSpace(productId))
             {
@@ -6649,7 +6659,8 @@ namespace SmartSembakoAssistant.Services
                 internalNote,
                 updateMasterCost,
                 allowNegativeTarget,
-                documentDateOverride: null);
+                documentDateOverride: null,
+                allowDisabledProducts: allowDisabledProducts);
         }
 
         /// <summary>

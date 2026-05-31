@@ -30,6 +30,8 @@ namespace SmartSembakoAssistant.Views
         private readonly ObservableCollection<OcrReviewQueueItem> _ocrReviewQueueItems = new();
         private readonly ObservableCollection<UnitConversionMapping> _unitConversionMappings = new();
         private readonly ObservableCollection<SharedStockGroupRow> _sharedStockGroupRows = new();
+        private readonly ObservableCollection<MappingImportPreviewRow> _mappingImportPreviewRows = new();
+        private MappingImportPreview? _lastMappingImportPreview;
         private string? _selectedMappingProductId;
         private string? _selectedUnitConversionId;
         private string? _selectedParentConversionProductId;
@@ -72,6 +74,7 @@ namespace SmartSembakoAssistant.Views
             DgOcrReviewQueue.ItemsSource = _ocrReviewQueueItems;
             DgUnitConversions.ItemsSource = _unitConversionMappings;
             DgSharedStock.ItemsSource = _sharedStockGroupRows;
+            DgMappingImportPreview.ItemsSource = _mappingImportPreviewRows;
 
             WireDirtyTracking();
             LoadSettings();
@@ -377,6 +380,10 @@ namespace SmartSembakoAssistant.Views
             BtnAddMapping.IsEnabled = ocrEnabled;
             BtnRefreshMappings.IsEnabled = ocrEnabled;
             DgProductMappings.IsEnabled = ocrEnabled;
+            BtnExportMappingPackage.IsEnabled = _posDbService != null;
+            BtnImportMappingPackage.IsEnabled = _posDbService != null;
+            BtnApplyMappingImport.IsEnabled = _posDbService != null && _lastMappingImportPreview != null;
+            CmbMappingImportMode.IsEnabled = _posDbService != null;
             TxtConversionParentName.IsEnabled = ocrEnabled;
             TxtConversionChildName.IsEnabled = ocrEnabled;
             TxtConversionRate.IsEnabled = ocrEnabled;
@@ -1224,7 +1231,7 @@ namespace SmartSembakoAssistant.Views
                 }
 
                 string note = $"SSA SharedStock: group={group.Id}; source={source.Member.ProductId}; target={item.Member.ProductId}; action=set; trigger=-; reason=settings sync";
-                var result = await _posDbService.AdjustStockAllowNegativeAsync(item.Member.ProductId, delta, internalNote: note);
+                var result = await _posDbService.AdjustStockAllowNegativeAsync(item.Member.ProductId, delta, internalNote: note, allowDisabledProducts: true);
                 if (result.Success)
                 {
                     successCount++;
@@ -1359,7 +1366,7 @@ namespace SmartSembakoAssistant.Views
                 ? $"SSA shadow conversion | Parent {parentProductName ?? parentProductId} | {parentQuantity:N2} x {effectiveRate:N2} -> {childQuantity:N2} {conversion.ChildProductName ?? conversion.ChildProductId} | modal Rp {childUnitCostValue:N0}"
                 : null;
             var adjustResult = hasChildUnitCost
-                ? await _posDbService.AdjustStockWithCostAsync(conversion.ChildProductId, childQuantity, childUnitCostValue, updateMasterCost: updateMasterCost, internalNote: internalNote)
+                ? await _posDbService.AdjustStockWithCostAsync(conversion.ChildProductId, childQuantity, childUnitCostValue, updateMasterCost: updateMasterCost, internalNote: internalNote, allowDisabledProducts: true)
                 : await _posDbService.AdjustStockAsync(conversion.ChildProductId, childQuantity);
             if (!adjustResult.Success)
             {
@@ -1750,6 +1757,117 @@ namespace SmartSembakoAssistant.Views
             finally
             {
                 BtnRefreshMappings.IsEnabled = ChkOcrEnabled.IsChecked == true;
+            }
+        }
+
+        private MappingImportMode GetSelectedMappingImportMode()
+        {
+            string label = (CmbMappingImportMode.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Merge Safe";
+            return label switch
+            {
+                "Import New Only" => MappingImportMode.ImportNewOnly,
+                "Overwrite Existing" => MappingImportMode.OverwriteExisting,
+                _ => MappingImportMode.MergeSafe
+            };
+        }
+
+        private MappingTransferService CreateMappingTransferService()
+        {
+            return new MappingTransferService(_configService, _databaseService, _posDbService);
+        }
+
+        private async void BtnExportMappingPackage_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dialog = new SaveFileDialog
+                {
+                    Filter = "JSON File (*.json)|*.json|All Files (*.*)|*.*",
+                    DefaultExt = "json",
+                    FileName = $"ssa_mapping_export_{DateTime.Now:yyyyMMdd_HHmmss}.json"
+                };
+
+                if (dialog.ShowDialog() != true)
+                {
+                    return;
+                }
+
+                await CreateMappingTransferService().SaveExportPackageAsync(dialog.FileName);
+                TxtMappingTransferStatus.Text = $"Export mapping package selesai: {dialog.FileName}";
+                ToastHelper.ShowSuccess("Mapping Transfer", "Export mapping package selesai.");
+            }
+            catch (Exception ex)
+            {
+                TxtMappingTransferStatus.Text = $"Export gagal: {ex.Message}";
+                ToastHelper.ShowError("Mapping Transfer", ex.Message);
+            }
+        }
+
+        private async void BtnImportMappingPackage_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dialog = new OpenFileDialog
+                {
+                    Filter = "JSON File (*.json)|*.json|All Files (*.*)|*.*",
+                    Title = "Pilih mapping package"
+                };
+
+                if (dialog.ShowDialog() != true)
+                {
+                    return;
+                }
+
+                _lastMappingImportPreview = await CreateMappingTransferService()
+                    .PreviewImportAsync(dialog.FileName, GetSelectedMappingImportMode());
+                _mappingImportPreviewRows.Clear();
+                foreach (var row in _lastMappingImportPreview.Rows)
+                {
+                    _mappingImportPreviewRows.Add(row);
+                }
+
+                TxtMappingTransferStatus.Text = $"Preview: {_lastMappingImportPreview.Summary}";
+                BtnApplyMappingImport.IsEnabled = true;
+            }
+            catch (Exception ex)
+            {
+                TxtMappingTransferStatus.Text = $"Import preview gagal: {ex.Message}";
+                ToastHelper.ShowError("Mapping Transfer", ex.Message);
+            }
+        }
+
+        private async void BtnApplyMappingImport_Click(object sender, RoutedEventArgs e)
+        {
+            if (_lastMappingImportPreview == null)
+            {
+                ToastHelper.ShowInfo("Mapping Transfer", "Belum ada preview import.");
+                return;
+            }
+
+            try
+            {
+                var confirm = MessageBox.Show(
+                    Window.GetWindow(this),
+                    $"Apply mapping import?\n\n{_lastMappingImportPreview.Summary}\n\nMode: {_lastMappingImportPreview.Mode}",
+                    "Mapping Transfer",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+                if (confirm != MessageBoxResult.Yes)
+                {
+                    return;
+                }
+
+                var summary = await CreateMappingTransferService().ApplyImportAsync(_lastMappingImportPreview);
+                TxtMappingTransferStatus.Text = $"Apply selesai: {summary}";
+                await RefreshOcrMappingRegistryAsync();
+                await RefreshUnitConversionsAsync();
+                await RefreshSharedStockGroupsAsync();
+                ToastHelper.ShowSuccess("Mapping Transfer", $"Import selesai. Applied {summary.Applied}, skipped {summary.Skipped}.");
+            }
+            catch (Exception ex)
+            {
+                TxtMappingTransferStatus.Text = $"Apply import gagal: {ex.Message}";
+                ToastHelper.ShowError("Mapping Transfer", ex.Message);
             }
         }
 
@@ -2192,7 +2310,8 @@ namespace SmartSembakoAssistant.Views
                     quantity,
                     price,
                     1,
-                    $"OCR Review Queue | Raw: {queueItem.RawProductName} | Supplier: {queueItem.SupplierName} | Correlation: {queueItem.ReceiptCorrelationId}");
+                    $"OCR Review Queue | Raw: {queueItem.RawProductName} | Supplier: {queueItem.SupplierName} | Correlation: {queueItem.ReceiptCorrelationId}",
+                    allowDisabledProducts: true);
 
                 if (!result.Success)
                 {

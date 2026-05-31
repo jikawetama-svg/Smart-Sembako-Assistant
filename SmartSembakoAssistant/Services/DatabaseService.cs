@@ -480,6 +480,9 @@ namespace SmartSembakoAssistant.Services
                     "CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)",
                     "CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)",
                     "CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(category)",
+                    "CREATE INDEX IF NOT EXISTS idx_logs_level_timestamp ON logs(level, timestamp)",
+                    "CREATE INDEX IF NOT EXISTS idx_logs_category_level_timestamp ON logs(category, level, timestamp)",
+                    "CREATE INDEX IF NOT EXISTS idx_logs_id_desc ON logs(id DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)",
                     "CREATE INDEX IF NOT EXISTS idx_users_whatsapp_number ON users(whatsapp_number)",
                     "CREATE INDEX IF NOT EXISTS idx_conversation_sessions_user_id ON conversation_sessions(user_id)",
@@ -889,7 +892,12 @@ namespace SmartSembakoAssistant.Services
             return Convert.ToInt64(result);
         }
 
-        public async Task<List<LogEntry>> GetLogsAsync(string? category = null, string? level = null, int limit = 100)
+        public async Task<List<LogEntry>> GetLogsAsync(
+            string? category = null,
+            string? level = null,
+            int limit = 100,
+            long? beforeId = null,
+            CancellationToken cancellationToken = default)
         {
             var logs = new List<LogEntry>();
 
@@ -915,7 +923,13 @@ namespace SmartSembakoAssistant.Services
                 parameters.Add("@level", level);
             }
 
-            sql += " ORDER BY timestamp DESC LIMIT @limit";
+            if (beforeId.HasValue)
+            {
+                sql += " AND id < @beforeId";
+                parameters.Add("@beforeId", beforeId.Value);
+            }
+
+            sql += " ORDER BY id DESC LIMIT @limit";
             parameters.Add("@limit", limit);
 
             using var command = new SqliteCommand(sql, connection);
@@ -924,8 +938,8 @@ namespace SmartSembakoAssistant.Services
                 command.Parameters.AddWithValue(param.Key, param.Value);
             }
 
-            using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
             {
                 logs.Add(new LogEntry
                 {
@@ -944,40 +958,110 @@ namespace SmartSembakoAssistant.Services
 
         public async Task ClearOldLogsAsync(int daysToKeep = 30)
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-
-            string sql = @"
-                DELETE FROM logs
-                WHERE timestamp < datetime('now', @days)";
-
-            using var command = new SqliteCommand(sql, connection);
-            command.Parameters.AddWithValue("@days", $"-{daysToKeep} days");
-
-            await command.ExecuteNonQueryAsync();
+            await DeleteLogsBeforeChunkedAsync(DateTime.Now.AddDays(-daysToKeep));
         }
 
         public async Task<int> DeleteLogsBeforeAsync(DateTime cutoffDate)
         {
+            var result = await DeleteLogsBeforeChunkedAsync(cutoffDate);
+            return result.DeletedCount;
+        }
+
+        public async Task<LogDeleteResult> DeleteLogsBeforeChunkedAsync(
+            DateTime cutoffDate,
+            IProgress<int>? progress = null,
+            int batchSize = 1000,
+            CancellationToken cancellationToken = default)
+        {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
+            await connection.OpenAsync(cancellationToken);
 
-            string sql = "DELETE FROM logs WHERE timestamp < @cutoff";
-            using var command = new SqliteCommand(sql, connection);
-            command.Parameters.AddWithValue("@cutoff", cutoffDate.ToString("yyyy-MM-dd HH:mm:ss"));
+            var result = new LogDeleteResult();
+            const string sql = @"
+                DELETE FROM logs
+                WHERE id IN (
+                    SELECT id
+                    FROM logs
+                    WHERE timestamp < @cutoff
+                    ORDER BY id
+                    LIMIT @batchSize
+                )";
 
-            return await command.ExecuteNonQueryAsync();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@cutoff", cutoffDate.ToString("yyyy-MM-dd HH:mm:ss"));
+                command.Parameters.AddWithValue("@batchSize", batchSize);
+
+                int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+                if (deleted <= 0)
+                {
+                    break;
+                }
+
+                result.DeletedCount += deleted;
+                result.BatchCount++;
+                progress?.Report(result.DeletedCount);
+
+                if (deleted < batchSize)
+                {
+                    break;
+                }
+            }
+
+            return result;
         }
 
         public async Task<int> DeleteAllLogsAsync()
         {
+            var result = await DeleteAllLogsChunkedAsync();
+            return result.DeletedCount;
+        }
+
+        public async Task<LogDeleteResult> DeleteAllLogsChunkedAsync(
+            IProgress<int>? progress = null,
+            int batchSize = 1000,
+            CancellationToken cancellationToken = default)
+        {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
+            await connection.OpenAsync(cancellationToken);
 
-            string sql = "DELETE FROM logs";
-            using var command = new SqliteCommand(sql, connection);
+            var result = new LogDeleteResult();
+            const string sql = @"
+                DELETE FROM logs
+                WHERE id IN (
+                    SELECT id
+                    FROM logs
+                    ORDER BY id
+                    LIMIT @batchSize
+                )";
 
-            return await command.ExecuteNonQueryAsync();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@batchSize", batchSize);
+
+                int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+                if (deleted <= 0)
+                {
+                    break;
+                }
+
+                result.DeletedCount += deleted;
+                result.BatchCount++;
+                progress?.Report(result.DeletedCount);
+
+                if (deleted < batchSize)
+                {
+                    break;
+                }
+            }
+
+            return result;
         }
 
         #endregion

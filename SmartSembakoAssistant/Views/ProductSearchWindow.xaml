@@ -44,6 +44,7 @@
                 <DataGridTextColumn Header="Nama Produk" Binding="{Binding Name}" Width="*"/>
                 <DataGridTextColumn Header="Unit" Binding="{Binding Unit}" Width="90"/>
                 <DataGridTextColumn Header="Stok" Binding="{Binding Stock}" Width="90"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding ActiveStatus}" Width="90"/>
             </DataGrid.Columns>
         </DataGrid>
 

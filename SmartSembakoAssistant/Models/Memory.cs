@@ -32,6 +32,12 @@ namespace SmartSembakoAssistant.Models
         public string? UserId { get; set; }
     }
 
+    public class LogDeleteResult
+    {
+        public int DeletedCount { get; set; }
+        public int BatchCount { get; set; }
+    }
+
     public class OcrResult
     {
         public string? ImagePath { get; set; }

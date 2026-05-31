@@ -145,6 +145,8 @@
         <Border Grid.Row="3" Background="White" CornerRadius="8" Padding="14,10">
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="TxtDisplayCount" Text="0 logs" FontSize="11" Foreground="#6B7280" Margin="0,0,16,0"/>
+                <Button x:Name="BtnLoadMore" Content="Load More" Style="{StaticResource LogActionButtonStyle}" Click="BtnLoadMore_Click"/>
+                <TextBlock x:Name="TxtLogStatus" Text="" FontSize="11" Foreground="#6B7280" VerticalAlignment="Center" Margin="0,0,12,0" TextTrimming="CharacterEllipsis"/>
                 <Button Content="🗑️ Clear Old Logs (>30 hari)" Style="{StaticResource DangerButtonStyle}" Margin="0,0,6,0" Click="BtnClearOldLogs_Click"/>
                 <Button Content="🗑️ Clear All Logs" Style="{StaticResource DangerButtonStyle}" Click="BtnClearAllLogs_Click"/>
             </StackPanel>

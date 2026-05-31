@@ -21,6 +21,7 @@ namespace SmartSembakoAssistant.Models
         public DateTime? ExpiryDate { get; set; } // Mapped dari DocumentItemExpirationDate.ExpirationDate
         public string? BatchNumber { get; set; } // Mapped dari DocumentItemExpirationDate.BatchNumber
         public bool IsActive { get; set; } = true; // Mapped dari Product.IsEnabled
+        public string ActiveStatus => IsActive ? "Aktif" : "Nonaktif";
         public decimal SoldThisMonth { get; set; }
         
         // Computed property untuk status stok
