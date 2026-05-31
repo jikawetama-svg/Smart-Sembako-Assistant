@@ -20,6 +20,7 @@ namespace SmartSembakoAssistant.Views
         private string? _currentCategory;
         private bool _hasMoreLogs;
         private bool _isBusy;
+        private DateTime _lastLoadedAt;
 
         public LogsView(
             DatabaseService databaseService,
@@ -32,12 +33,23 @@ namespace SmartSembakoAssistant.Views
 
             DgLogs.ItemsSource = _logs;
 
-            Loaded += async (s, e) => await LoadLogsAsync();
+            Loaded += async (s, e) => await LoadLogsIfStaleAsync();
         }
 
         public async Task LoadDataAsync()
         {
-            await LoadLogsAsync();
+            await LoadLogsIfStaleAsync();
+        }
+
+        private async Task LoadLogsIfStaleAsync()
+        {
+            if (_logs.Count > 0 && DateTime.Now - _lastLoadedAt < TimeSpan.FromSeconds(15))
+            {
+                UpdateStats();
+                return;
+            }
+
+            await LoadLogsAsync(GetSelectedLevel(), GetSelectedCategory());
         }
 
         private async Task LoadLogsAsync(
@@ -93,6 +105,7 @@ namespace SmartSembakoAssistant.Views
                 }
 
                 UpdateStats();
+                _lastLoadedAt = DateTime.Now;
             }
             catch (OperationCanceledException)
             {
@@ -171,7 +184,12 @@ namespace SmartSembakoAssistant.Views
                 if (saveDialog.ShowDialog() == true)
                 {
                     SetBusy(true, "Export CSV...");
-                    await _loggingService.ExportLogsToCsvAsync(saveDialog.FileName);
+                    var progress = new Progress<int>(count => TxtLogStatus.Text = $"Export {count} logs...");
+                    await _loggingService.ExportLogsToCsvAsync(
+                        saveDialog.FileName,
+                        _currentCategory,
+                        _currentLevel,
+                        progress);
                     TxtLogStatus.Text = $"Export selesai: {saveDialog.FileName}";
                 }
             }

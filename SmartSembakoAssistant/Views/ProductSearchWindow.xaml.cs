@@ -6,20 +6,35 @@ using SmartSembakoAssistant.Models;
 
 namespace SmartSembakoAssistant.Views
 {
+    public enum ProductSearchMode
+    {
+        Operational,
+        Mapping
+    }
+
     public partial class ProductSearchWindow : Window
     {
         private readonly List<Product> _allProducts;
         private readonly ObservableCollection<Product> _filteredProducts = new();
+        private readonly ProductSearchMode _mode;
 
         public Product? SelectedProduct { get; private set; }
 
-        public ProductSearchWindow(IEnumerable<Product> products, string? initialQuery = null)
+        public ProductSearchWindow(
+            IEnumerable<Product> products,
+            string? initialQuery = null,
+            ProductSearchMode mode = ProductSearchMode.Operational)
         {
             InitializeComponent();
+            _mode = mode;
             _allProducts = products
                 .Where(product => !string.IsNullOrWhiteSpace(product.Id) && !string.IsNullOrWhiteSpace(product.Name))
+                .Where(product => _mode == ProductSearchMode.Mapping || product.IsActive)
                 .OrderBy(product => product.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            Title = _mode == ProductSearchMode.Mapping
+                ? "Cari Produk Aronium - Mapping/Admin"
+                : "Cari Produk Aronium";
 
             DgProducts.ItemsSource = _filteredProducts;
             TxtSearch.Text = initialQuery ?? string.Empty;

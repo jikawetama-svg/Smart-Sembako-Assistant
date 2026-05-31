@@ -38,6 +38,16 @@
                   IsReadOnly="True"
                   SelectionMode="Single"
                   MouseDoubleClick="DgProducts_MouseDoubleClick">
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsActive}" Value="False">
+                            <Setter Property="Background" Value="#FFF7ED"/>
+                            <Setter Property="Foreground" Value="#9A3412"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="90"/>
                 <DataGridTextColumn Header="Kode" Binding="{Binding Sku}" Width="130"/>

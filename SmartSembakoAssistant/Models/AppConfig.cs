@@ -13,6 +13,7 @@ namespace SmartSembakoAssistant.Models
         public PosDbSettings? PosDb { get; set; }
         public GoogleSheetsSettings? GoogleSheets { get; set; }
         public OcrReceiptSettings? OcrReceipt { get; set; }
+        public MappingPolicySettings? MappingPolicy { get; set; }
         public MemorySettings? Memory { get; set; }
         public NotificationSettings? Notifications { get; set; }
         public AppSettings? App { get; set; }
@@ -249,6 +250,13 @@ namespace SmartSembakoAssistant.Models
         public string SupplierKey { get; set; } = "GLOBAL";
         public List<string> SupplierNames { get; set; } = new();
         public List<OcrProductMapping> Mappings { get; set; } = new();
+    }
+
+    public class MappingPolicySettings
+    {
+        public bool IncludeDisabledProductsInMappingSearch { get; set; } = true;
+        public bool AllowDisabledProductsInRuntimeMappings { get; set; } = true;
+        public bool AllowDisabledProductsInAutoDiscovery { get; set; } = false;
     }
 
     public class MemorySettings

@@ -188,6 +188,12 @@ namespace SmartSembakoAssistant.Services
                         TextTriggerCaption = _config.OcrReceipt.TextTriggerCaption,
                         AutoDetectTextReceipt = _config.OcrReceipt.AutoDetectTextReceipt
                     } : null,
+                    MappingPolicy = _config?.MappingPolicy != null ? new MappingPolicySettings
+                    {
+                        IncludeDisabledProductsInMappingSearch = _config.MappingPolicy.IncludeDisabledProductsInMappingSearch,
+                        AllowDisabledProductsInRuntimeMappings = _config.MappingPolicy.AllowDisabledProductsInRuntimeMappings,
+                        AllowDisabledProductsInAutoDiscovery = _config.MappingPolicy.AllowDisabledProductsInAutoDiscovery
+                    } : null,
                     Memory = _config?.Memory,
                     Notifications = _config?.Notifications != null ? new NotificationSettings
                     {

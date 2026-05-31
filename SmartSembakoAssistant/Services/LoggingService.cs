@@ -82,23 +82,57 @@ namespace SmartSembakoAssistant.Services
             return await _databaseService.GetLogsAsync(category, level, limit, beforeId, cancellationToken);
         }
 
-        public async Task ExportLogsToCsvAsync(string filePath)
+        public async Task ExportLogsToCsvAsync(
+            string filePath,
+            string? category = null,
+            string? level = null,
+            IProgress<int>? progress = null,
+            CancellationToken cancellationToken = default)
         {
-            var logs = await _databaseService.GetLogsAsync(limit: 10000);
+            const int batchSize = 1000;
+            long? beforeId = null;
+            int exported = 0;
 
-            var csvLines = new List<string>
-            {
-                "ID,Timestamp,Level,Category,Message,Details,User ID"
-            };
+            await using var writer = new StreamWriter(filePath, false, System.Text.Encoding.UTF8);
+            await writer.WriteLineAsync("ID,Timestamp,Level,Category,Message,Details,User ID");
 
-            foreach (var log in logs)
+            while (true)
             {
-                string line = $"{log.Id},{log.Timestamp:yyyy-MM-dd HH:mm:ss},{log.Level},{log.Category}," +
-                             $"\"{EscapeCsvField(log.Message)}\",\"{EscapeCsvField(log.Details)}\",{log.UserId}";
-                csvLines.Add(line);
+                cancellationToken.ThrowIfCancellationRequested();
+                var logs = await _databaseService.GetLogsAsync(
+                    category,
+                    level,
+                    batchSize,
+                    beforeId,
+                    cancellationToken);
+
+                if (logs.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var log in logs)
+                {
+                    string line = string.Join(",",
+                        log.Id,
+                        EscapeCsvField(log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")),
+                        EscapeCsvField(log.Level),
+                        EscapeCsvField(log.Category),
+                        EscapeCsvField(log.Message),
+                        EscapeCsvField(log.Details),
+                        EscapeCsvField(log.UserId));
+                    await writer.WriteLineAsync(line);
+                }
+
+                exported += logs.Count;
+                beforeId = logs.Last().Id;
+                progress?.Report(exported);
+
+                if (logs.Count < batchSize)
+                {
+                    break;
+                }
             }
-
-            await File.WriteAllLinesAsync(filePath, csvLines);
         }
 
         private string EscapeCsvField(string? field)

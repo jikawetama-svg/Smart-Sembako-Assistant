@@ -124,11 +124,17 @@ namespace SmartSembakoAssistant.Services
 
             foreach (var row in package.Payload.OcrProductMappings)
             {
-                string? resolvedProductId = ResolveProductId(row.Product, products);
+                var resolution = ResolveProductIdentity(row.Product, products);
+                string? resolvedProductId = resolution.ResolvedProductId;
                 string key = $"{ConfigService.NormalizeOcrSupplierKey(row.Mapping.SupplierKey)}:{ConfigService.NormalizeOcrName(row.Mapping.InvoiceName)}";
                 var existing = ocrMappings.FirstOrDefault(mapping =>
                     string.Equals(ConfigService.NormalizeOcrSupplierKey(mapping.SupplierKey), ConfigService.NormalizeOcrSupplierKey(row.Mapping.SupplierKey), StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(ConfigService.NormalizeOcrName(mapping.InvoiceName), ConfigService.NormalizeOcrName(row.Mapping.InvoiceName), StringComparison.OrdinalIgnoreCase));
+                string message = CombineMessages(
+                    resolution.IsResolved ? BuildDisabledWarning(resolution.Candidates.FirstOrDefault()) : resolution.Reason,
+                    existing != null && string.Equals(existing.TrustLevel, "blocked", StringComparison.OrdinalIgnoreCase)
+                        ? "Existing blocked; overwrite hanya di mode Overwrite Existing."
+                        : "");
 
                 preview.Rows.Add(BuildPreviewRow(
                     "OCR",
@@ -137,18 +143,19 @@ namespace SmartSembakoAssistant.Services
                     row.Mapping.DatabaseProductName,
                     existing == null,
                     existing != null && string.Equals(existing.DatabaseProductId, resolvedProductId, StringComparison.OrdinalIgnoreCase),
-                    resolvedProductId == null,
+                    !resolution.IsResolved && !resolution.IsAmbiguous,
+                    resolution.IsAmbiguous,
                     mode,
                     row,
                     resolvedProductId == null ? new List<string>() : new List<string> { resolvedProductId },
-                    existing != null && string.Equals(existing.TrustLevel, "blocked", StringComparison.OrdinalIgnoreCase)
-                        ? "Existing blocked; overwrite hanya di mode Overwrite Existing."
-                        : ""));
+                    resolution.Candidates,
+                    message));
             }
 
             foreach (var row in package.Payload.ProductAliases)
             {
-                string? resolvedProductId = ResolveProductId(row.Product, products);
+                var resolution = ResolveProductIdentity(row.Product, products);
+                string? resolvedProductId = resolution.ResolvedProductId;
                 string key = Normalize(row.Alias.AliasName);
                 var existing = aliases.FirstOrDefault(alias => string.Equals(Normalize(alias.AliasName), key, StringComparison.OrdinalIgnoreCase));
                 preview.Rows.Add(BuildPreviewRow(
@@ -158,23 +165,31 @@ namespace SmartSembakoAssistant.Services
                     row.Alias.ProductName ?? row.Product.Name ?? "",
                     existing == null,
                     existing != null && string.Equals(existing.ProductId, resolvedProductId, StringComparison.OrdinalIgnoreCase),
-                    resolvedProductId == null,
+                    !resolution.IsResolved && !resolution.IsAmbiguous,
+                    resolution.IsAmbiguous,
                     mode,
                     row,
-                    resolvedProductId == null ? new List<string>() : new List<string> { resolvedProductId }));
+                    resolvedProductId == null ? new List<string>() : new List<string> { resolvedProductId },
+                    resolution.Candidates,
+                    resolution.IsResolved ? BuildDisabledWarning(resolution.Candidates.FirstOrDefault()) : resolution.Reason));
             }
 
             foreach (var row in package.Payload.UnitConversions)
             {
-                string? parentId = ResolveProductId(row.ParentProduct, products);
-                string? childId = ResolveProductId(row.ChildProduct, products);
+                var parentResolution = ResolveProductIdentity(row.ParentProduct, products);
+                var childResolution = ResolveProductIdentity(row.ChildProduct, products);
+                string? parentId = parentResolution.ResolvedProductId;
+                string? childId = childResolution.ResolvedProductId;
                 var existing = parentId == null
                     ? null
                     : unitConversions.FirstOrDefault(mapping => string.Equals(mapping.ParentProductId, parentId, StringComparison.OrdinalIgnoreCase));
                 bool same = existing != null &&
                             string.Equals(existing.ChildProductId, childId, StringComparison.OrdinalIgnoreCase) &&
                             Math.Abs(existing.ConversionRate - row.Mapping.ConversionRate) < 0.0001m;
-                string warning = BuildSameUnitRatioOneWarning(parentId, childId, row.Mapping.ConversionRate, products);
+                string warning = CombineMessages(
+                    BuildSameUnitRatioOneWarning(parentId, childId, row.Mapping.ConversionRate, products),
+                    parentResolution.IsResolved ? BuildDisabledWarning(parentResolution.Candidates.FirstOrDefault(), "Parent") : parentResolution.Reason,
+                    childResolution.IsResolved ? BuildDisabledWarning(childResolution.Candidates.FirstOrDefault(), "Child") : childResolution.Reason);
                 preview.Rows.Add(BuildPreviewRow(
                     "UnitConversion",
                     $"{row.Mapping.ParentProductName} -> {row.Mapping.ChildProductName}",
@@ -182,18 +197,21 @@ namespace SmartSembakoAssistant.Services
                     $"{row.Mapping.ParentProductName} -> {row.Mapping.ChildProductName} @ {row.Mapping.ConversionRate:0.##}",
                     existing == null,
                     same,
-                    parentId == null || childId == null,
+                    (!parentResolution.IsResolved && !parentResolution.IsAmbiguous) || (!childResolution.IsResolved && !childResolution.IsAmbiguous),
+                    parentResolution.IsAmbiguous || childResolution.IsAmbiguous,
                     mode,
                     row,
                     new[] { parentId, childId }.Where(id => !string.IsNullOrWhiteSpace(id)).Cast<string>().ToList(),
+                    parentResolution.Candidates.Concat(childResolution.Candidates).ToList(),
                     warning));
             }
 
             foreach (var row in package.Payload.SharedStockGroups)
             {
-                var resolvedIds = row.Group.Members
-                    .Select((member, index) => ResolveProductId(row.MemberProducts.ElementAtOrDefault(index) ?? new ProductIdentitySnapshot { ProductId = member.ProductId, Name = member.ProductName }, products))
+                var resolutions = row.Group.Members
+                    .Select((member, index) => ResolveProductIdentity(row.MemberProducts.ElementAtOrDefault(index) ?? new ProductIdentitySnapshot { ProductId = member.ProductId, Name = member.ProductName }, products))
                     .ToList();
+                var resolvedIds = resolutions.Select(resolution => resolution.ResolvedProductId).ToList();
                 var existing = sharedGroups.FirstOrDefault(group => string.Equals(Normalize(group.GroupName), Normalize(row.Group.GroupName), StringComparison.OrdinalIgnoreCase));
                 bool same = existing != null &&
                             resolvedIds.All(id => id != null) &&
@@ -206,10 +224,15 @@ namespace SmartSembakoAssistant.Services
                     string.Join(", ", row.Group.Members.Select(member => member.ProductName ?? member.ProductId)),
                     existing == null,
                     same,
-                    resolvedIds.Any(id => id == null),
+                    resolutions.Any(resolution => !resolution.IsResolved && !resolution.IsAmbiguous),
+                    resolutions.Any(resolution => resolution.IsAmbiguous),
                     mode,
                     row,
-                    resolvedIds.Where(id => id != null).Cast<string>().ToList()));
+                    resolvedIds.Where(id => id != null).Cast<string>().ToList(),
+                    resolutions.SelectMany(resolution => resolution.Candidates).ToList(),
+                    CombineMessages(resolutions.Select(resolution => resolution.IsResolved
+                        ? BuildDisabledWarning(resolution.Candidates.FirstOrDefault())
+                        : resolution.Reason).ToArray())));
             }
 
             preview.Summary = BuildSummary(preview.Rows);
@@ -223,9 +246,19 @@ namespace SmartSembakoAssistant.Services
             summary.Applied = 0;
             summary.Skipped = preview.Rows.Count - applicable.Count;
 
+            BackupOcrMappings();
+            await SaveConflictReportAsync(preview);
+
             var currentMappings = (_configService.Config?.OcrReceipt?.ProductMappings ?? new List<OcrProductMapping>())
                 .Select(CloneOcrMapping)
                 .ToList();
+            var products = _posDbService == null
+                ? new List<Product>()
+                : await _posDbService.GetAllProductsAsync();
+            var productById = products
+                .Where(product => !string.IsNullOrWhiteSpace(product.Id))
+                .GroupBy(product => product.Id!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
             foreach (var row in applicable)
             {
@@ -237,12 +270,27 @@ namespace SmartSembakoAssistant.Services
                         break;
                     case "Alias" when row.Source is ProductAliasExportRow alias && row.ResolvedProductIds.Count == 1:
                         alias.Alias.ProductId = row.ResolvedProductIds[0];
+                        if (productById.TryGetValue(alias.Alias.ProductId, out var aliasProduct))
+                        {
+                            alias.Alias.ProductName = aliasProduct.Name;
+                        }
+
                         await _databaseService.UpsertProductAliasAsync(alias.Alias);
                         summary.Applied++;
                         break;
                     case "UnitConversion" when row.Source is UnitConversionExportRow conversion && row.ResolvedProductIds.Count == 2:
                         conversion.Mapping.ParentProductId = row.ResolvedProductIds[0];
                         conversion.Mapping.ChildProductId = row.ResolvedProductIds[1];
+                        if (productById.TryGetValue(conversion.Mapping.ParentProductId, out var parentProduct))
+                        {
+                            conversion.Mapping.ParentProductName = parentProduct.Name;
+                        }
+
+                        if (productById.TryGetValue(conversion.Mapping.ChildProductId, out var childProduct))
+                        {
+                            conversion.Mapping.ChildProductName = childProduct.Name;
+                        }
+
                         await _databaseService.UpsertUnitConversionAsync(conversion.Mapping);
                         summary.Applied++;
                         break;
@@ -250,6 +298,10 @@ namespace SmartSembakoAssistant.Services
                         for (int i = 0; i < shared.Group.Members.Count; i++)
                         {
                             shared.Group.Members[i].ProductId = row.ResolvedProductIds[i];
+                            if (productById.TryGetValue(row.ResolvedProductIds[i], out var memberProduct))
+                            {
+                                shared.Group.Members[i].ProductName = memberProduct.Name;
+                            }
                         }
 
                         await _databaseService.UpsertSharedStockGroupAsync(shared.Group);
@@ -262,6 +314,65 @@ namespace SmartSembakoAssistant.Services
             return summary;
         }
 
+        private void BackupOcrMappings()
+        {
+            string sourcePath = _configService.OcrMappingsPath;
+            if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+            {
+                return;
+            }
+
+            string? directory = Path.GetDirectoryName(sourcePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string backupPath = $"{sourcePath}.bak_{DateTime.Now:yyyyMMdd_HHmmss}";
+            if (File.Exists(backupPath))
+            {
+                backupPath = $"{backupPath}_{DateTime.Now.Ticks}";
+            }
+
+            File.Copy(sourcePath, backupPath, overwrite: false);
+        }
+
+        private async Task SaveConflictReportAsync(MappingImportPreview preview)
+        {
+            var reportRows = preview.Rows
+                .Where(row => row.Status is "Conflict" or "Missing" or "Ambiguous" or "Warning")
+                .Select(row => new
+                {
+                    row.Type,
+                    row.Key,
+                    row.Existing,
+                    row.Import,
+                    row.Status,
+                    row.Action,
+                    row.Message,
+                    row.ResolvedProductIds,
+                    row.CandidateProducts
+                })
+                .ToList();
+
+            if (!reportRows.Any())
+            {
+                return;
+            }
+
+            string directory = Path.GetDirectoryName(_configService.OcrMappingsPath) ?? AppContext.BaseDirectory;
+            Directory.CreateDirectory(directory);
+            string reportPath = Path.Combine(directory, $"ssa_mapping_import_conflicts_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            string json = JsonSerializer.Serialize(new
+            {
+                ExportedAt = DateTimeOffset.Now,
+                preview.Mode,
+                preview.Summary,
+                Rows = reportRows
+            }, JsonOptions);
+            await File.WriteAllTextAsync(reportPath, json, Encoding.UTF8);
+        }
+
         private static MappingImportPreviewRow BuildPreviewRow(
             string type,
             string key,
@@ -270,14 +381,21 @@ namespace SmartSembakoAssistant.Services
             bool isNew,
             bool isSame,
             bool missing,
+            bool ambiguous,
             MappingImportMode mode,
             object source,
             List<string> resolvedProductIds,
+            List<ProductIdentitySnapshot>? candidateProducts = null,
             string message = "")
         {
             string status;
             string action;
-            if (missing)
+            if (ambiguous)
+            {
+                status = "Ambiguous";
+                action = "NeedsReview";
+            }
+            else if (missing)
             {
                 status = "Missing";
                 action = "Skip";
@@ -319,7 +437,8 @@ namespace SmartSembakoAssistant.Services
                 Action = action,
                 Message = message,
                 Source = source,
-                ResolvedProductIds = resolvedProductIds
+                ResolvedProductIds = resolvedProductIds,
+                CandidateProducts = candidateProducts ?? new List<ProductIdentitySnapshot>()
             };
         }
 
@@ -330,29 +449,36 @@ namespace SmartSembakoAssistant.Services
             {
                 New = list.Count(row => row.Status == "New"),
                 Same = list.Count(row => row.Status == "Same"),
-                Conflict = list.Count(row => row.Status is "Conflict" or "Overwrite"),
+                Conflict = list.Count(row => row.Status is "Conflict" or "Overwrite" or "Ambiguous"),
                 Missing = list.Count(row => row.Status == "Missing"),
                 Warning = list.Count(row => row.Status == "Warning")
             };
         }
 
-        private static string? ResolveProductId(ProductIdentitySnapshot snapshot, List<Product> products)
+        private static ProductIdentityResolution ResolveProductIdentity(ProductIdentitySnapshot snapshot, List<Product> products)
         {
             if (!string.IsNullOrWhiteSpace(snapshot.ProductId))
             {
                 var byId = products.FirstOrDefault(product => string.Equals(product.Id, snapshot.ProductId, StringComparison.OrdinalIgnoreCase));
                 if (byId != null && IsCompatibleSnapshot(snapshot, byId))
                 {
-                    return byId.Id;
+                    return Resolved(byId, "ProductId cocok.");
                 }
             }
 
             if (!string.IsNullOrWhiteSpace(snapshot.Sku))
             {
-                var bySku = products.FirstOrDefault(product => string.Equals(product.Sku, snapshot.Sku, StringComparison.OrdinalIgnoreCase));
-                if (bySku != null)
+                var bySku = products
+                    .Where(product => string.Equals(product.Sku, snapshot.Sku, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (bySku.Count == 1)
                 {
-                    return bySku.Id;
+                    return Resolved(bySku[0], "SKU cocok.");
+                }
+
+                if (bySku.Count > 1)
+                {
+                    return Ambiguous(bySku, "SKU cocok ke lebih dari satu produk.");
                 }
             }
 
@@ -365,17 +491,31 @@ namespace SmartSembakoAssistant.Services
                     (string.IsNullOrWhiteSpace(unit) || string.Equals(Normalize(product.Unit), unit, StringComparison.OrdinalIgnoreCase))).ToList();
                 if (exactNameUnit.Count == 1)
                 {
-                    return exactNameUnit[0].Id;
+                    return Resolved(exactNameUnit[0], "Nama dan unit cocok.");
+                }
+
+                if (exactNameUnit.Count > 1)
+                {
+                    return Ambiguous(exactNameUnit, "Nama dan unit cocok ke lebih dari satu produk.");
                 }
 
                 var exactName = products.Where(product => string.Equals(Normalize(product.Name), name, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (exactName.Count == 1)
                 {
-                    return exactName[0].Id;
+                    return Resolved(exactName[0], "Nama cocok.");
+                }
+
+                if (exactName.Count > 1)
+                {
+                    return Ambiguous(exactName, "Nama cocok ke lebih dari satu produk.");
                 }
             }
 
-            return null;
+            return new ProductIdentityResolution
+            {
+                Status = "Missing",
+                Reason = "Produk tidak ditemukan di POS target."
+            };
         }
 
         private static bool IsCompatibleSnapshot(ProductIdentitySnapshot snapshot, Product product)
@@ -392,6 +532,27 @@ namespace SmartSembakoAssistant.Services
 
             return !string.IsNullOrWhiteSpace(snapshot.Sku) &&
                    string.Equals(snapshot.Sku, product.Sku, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static ProductIdentityResolution Resolved(Product product, string reason)
+        {
+            return new ProductIdentityResolution
+            {
+                Status = "Resolved",
+                ResolvedProductId = product.Id,
+                Reason = reason,
+                Candidates = new List<ProductIdentitySnapshot> { ToSnapshot(product) }
+            };
+        }
+
+        private static ProductIdentityResolution Ambiguous(IEnumerable<Product> products, string reason)
+        {
+            return new ProductIdentityResolution
+            {
+                Status = "Ambiguous",
+                Reason = reason,
+                Candidates = products.Take(10).Select(ToSnapshot).ToList()
+            };
         }
 
         private static ProductIdentitySnapshot ToSnapshot(Product product)
@@ -464,6 +625,24 @@ namespace SmartSembakoAssistant.Services
             return string.Equals(Normalize(parent.Unit), Normalize(child.Unit), StringComparison.OrdinalIgnoreCase)
                 ? "Unit sama dan ratio 1; lebih cocok Shared Stock."
                 : string.Empty;
+        }
+
+        private static string BuildDisabledWarning(ProductIdentitySnapshot? product, string label = "Target")
+        {
+            if (product == null || product.IsActive)
+            {
+                return string.Empty;
+            }
+
+            return $"{label} produk nonaktif; aman hanya untuk mapping eksplisit/admin.";
+        }
+
+        private static string CombineMessages(params string?[] messages)
+        {
+            return string.Join(" ", messages
+                .Where(message => !string.IsNullOrWhiteSpace(message))
+                .Select(message => message!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase));
         }
 
         private static string Normalize(string? text)

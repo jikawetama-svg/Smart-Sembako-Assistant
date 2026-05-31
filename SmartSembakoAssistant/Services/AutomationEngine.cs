@@ -13105,9 +13105,11 @@ namespace SmartSembakoAssistant.Services
                 return new List<ProductMatchCandidate>();
             }
 
+            bool allowDisabledAutoDiscovery = _configService.Config?.MappingPolicy?.AllowDisabledProductsInAutoDiscovery == true;
             var products = await _posDbService.GetAllProductsAsync();
             return products
                 .Where(p => !string.IsNullOrWhiteSpace(p.Name))
+                .Where(p => allowDisabledAutoDiscovery || p.IsActive)
                 .Select(p => new
                 {
                     Product = p,

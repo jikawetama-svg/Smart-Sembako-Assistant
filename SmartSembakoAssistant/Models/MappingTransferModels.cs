@@ -79,9 +79,20 @@ namespace SmartSembakoAssistant.Models
         public string Message { get; set; } = "";
         public object? Source { get; set; }
         public List<string> ResolvedProductIds { get; set; } = new();
+        public List<ProductIdentitySnapshot> CandidateProducts { get; set; } = new();
 
         [JsonIgnore]
         public bool CanApply => Status is "New" or "Overwrite" or "Warning";
+    }
+
+    public class ProductIdentityResolution
+    {
+        public string Status { get; set; } = "Missing";
+        public string? ResolvedProductId { get; set; }
+        public List<ProductIdentitySnapshot> Candidates { get; set; } = new();
+        public string Reason { get; set; } = "";
+        public bool IsResolved => string.Equals(Status, "Resolved", StringComparison.OrdinalIgnoreCase);
+        public bool IsAmbiguous => string.Equals(Status, "Ambiguous", StringComparison.OrdinalIgnoreCase);
     }
 
     public class MappingImportSummary

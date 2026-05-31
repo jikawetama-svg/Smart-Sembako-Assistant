@@ -19,6 +19,8 @@ namespace SmartSembakoAssistant.Views
 
         private bool _isLoading;
         private bool _isDirty;
+        private bool _mappingTransferBusy;
+        private bool _sharedStockBusy;
         private bool _groqKeyVisible;
         private bool _geminiKeyVisible;
         private bool _botTokenVisible;
@@ -59,6 +61,8 @@ namespace SmartSembakoAssistant.Views
             public bool IsEnabled { get; set; }
             public string MembersSummary { get; set; } = "";
             public string StockSummary { get; set; } = "";
+            public string MemberStatusSummary { get; set; } = "";
+            public string DeltaSummary { get; set; } = "";
             public string StatusText { get; set; } = "";
             public string ToggleText => IsEnabled ? "Nonaktif" : "Aktifkan";
         }
@@ -110,6 +114,7 @@ namespace SmartSembakoAssistant.Views
                 config.Telegram ??= new TelegramSettings();
                 config.GoogleSheets ??= new GoogleSheetsSettings();
                 config.OcrReceipt ??= new OcrReceiptSettings();
+                config.MappingPolicy ??= new MappingPolicySettings();
 
                 TxtGroqApiKey.Text = NormalizeSecret(config.Groq.ApiKey, "YOUR_GROQ_API_KEY");
                 TxtGeminiApiKey.Text = NormalizeSecret(config.Groq.FallbackApiKey, "YOUR_GEMINI_API_KEY");
@@ -380,10 +385,10 @@ namespace SmartSembakoAssistant.Views
             BtnAddMapping.IsEnabled = ocrEnabled;
             BtnRefreshMappings.IsEnabled = ocrEnabled;
             DgProductMappings.IsEnabled = ocrEnabled;
-            BtnExportMappingPackage.IsEnabled = _posDbService != null;
-            BtnImportMappingPackage.IsEnabled = _posDbService != null;
-            BtnApplyMappingImport.IsEnabled = _posDbService != null && _lastMappingImportPreview != null;
-            CmbMappingImportMode.IsEnabled = _posDbService != null;
+            BtnExportMappingPackage.IsEnabled = !_mappingTransferBusy && _posDbService != null;
+            BtnImportMappingPackage.IsEnabled = !_mappingTransferBusy && _posDbService != null;
+            BtnApplyMappingImport.IsEnabled = !_mappingTransferBusy && _posDbService != null && _lastMappingImportPreview != null;
+            CmbMappingImportMode.IsEnabled = !_mappingTransferBusy && _posDbService != null;
             TxtConversionParentName.IsEnabled = ocrEnabled;
             TxtConversionChildName.IsEnabled = ocrEnabled;
             TxtConversionRate.IsEnabled = ocrEnabled;
@@ -392,7 +397,7 @@ namespace SmartSembakoAssistant.Views
             BtnAddUnitConversion.IsEnabled = ocrEnabled;
             BtnRefreshUnitConversions.IsEnabled = ocrEnabled;
             DgUnitConversions.IsEnabled = ocrEnabled;
-            bool sharedStockReady = _posDbService != null;
+            bool sharedStockReady = !_sharedStockBusy && _posDbService != null;
             TxtSharedStockGroupName.IsEnabled = sharedStockReady;
             TxtSharedStockPrimaryName.IsEnabled = sharedStockReady;
             TxtSharedStockSecondName.IsEnabled = sharedStockReady;
@@ -1076,16 +1081,34 @@ namespace SmartSembakoAssistant.Views
                 {
                     var stockParts = new List<string>();
                     var stockValues = new List<decimal>();
+                    var statusParts = new List<string>();
+                    bool hasMissingProduct = false;
+                    bool hasDisabledProduct = false;
                     foreach (var member in group.Members)
                     {
                         Product? product = _posDbService == null ? null : await _posDbService.GetProductByIdAsync(member.ProductId);
                         decimal stock = product?.Stock ?? 0;
                         stockValues.Add(stock);
+                        hasMissingProduct |= product == null;
+                        hasDisabledProduct |= product?.IsActive == false;
                         string primary = member.IsPrimary ? "*" : string.Empty;
-                        stockParts.Add($"{primary}{member.ProductName ?? product?.Name ?? member.ProductId}: {stock:N2}");
+                        string name = product?.Name ?? member.ProductName ?? member.ProductId;
+                        string status = product == null ? "Hilang" : product.IsActive ? "Aktif" : "Nonaktif";
+                        stockParts.Add($"{primary}{name}: {stock:N2}");
+                        statusParts.Add($"{primary}{name}: {status}, Rp {(product?.SellingPrice ?? 0):N0}");
                     }
 
-                    bool mismatch = stockValues.Distinct().Count() > 1;
+                    decimal minStock = stockValues.Count == 0 ? 0 : stockValues.Min();
+                    decimal maxStock = stockValues.Count == 0 ? 0 : stockValues.Max();
+                    decimal deltaStock = maxStock - minStock;
+                    bool mismatch = Math.Abs(deltaStock) > 0.0001m;
+                    string statusText = !group.IsEnabled
+                        ? "Nonaktif"
+                        : hasMissingProduct
+                            ? "Produk hilang"
+                            : hasDisabledProduct
+                                ? mismatch ? "Beda + nonaktif" : "Ada nonaktif"
+                                : mismatch ? "Beda stok" : "Seimbang";
                     _sharedStockGroupRows.Add(new SharedStockGroupRow
                     {
                         GroupId = group.Id,
@@ -1093,7 +1116,9 @@ namespace SmartSembakoAssistant.Views
                         IsEnabled = group.IsEnabled,
                         MembersSummary = string.Join(" | ", group.Members.Select(member => $"{(member.IsPrimary ? "*" : "")}{member.ProductName ?? member.ProductId}")),
                         StockSummary = string.Join(" | ", stockParts),
-                        StatusText = !group.IsEnabled ? "Nonaktif" : mismatch ? "Mismatch" : "Sinkron"
+                        MemberStatusSummary = string.Join(" | ", statusParts),
+                        DeltaSummary = deltaStock.ToString("N2"),
+                        StatusText = statusText
                     });
                 }
 
@@ -1123,7 +1148,7 @@ namespace SmartSembakoAssistant.Views
             }
 
             string seed = isParent ? TxtConversionParentName.Text.Trim() : TxtConversionChildName.Text.Trim();
-            var picker = new ProductSearchWindow(products, seed)
+            var picker = new ProductSearchWindow(products, seed, ProductSearchMode.Mapping)
             {
                 Owner = Window.GetWindow(this)
             };
@@ -1159,7 +1184,7 @@ namespace SmartSembakoAssistant.Views
             }
 
             string seed = isPrimary ? TxtSharedStockPrimaryName.Text.Trim() : TxtSharedStockSecondName.Text.Trim();
-            var picker = new ProductSearchWindow(products, seed)
+            var picker = new ProductSearchWindow(products, seed, ProductSearchMode.Mapping)
             {
                 Owner = Window.GetWindow(this)
             };
@@ -1288,7 +1313,7 @@ namespace SmartSembakoAssistant.Views
                 }
 
                 var products = await _posDbService.GetAllProductsAsync();
-                var picker = new ProductSearchWindow(products, parentProductName ?? string.Empty)
+                var picker = new ProductSearchWindow(products, parentProductName ?? string.Empty, ProductSearchMode.Mapping)
                 {
                     Owner = owner
                 };
@@ -1574,7 +1599,7 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
-                var picker = new ProductSearchWindow(products, TxtMappingInvoiceName.Text.Trim())
+                var picker = new ProductSearchWindow(products, TxtMappingInvoiceName.Text.Trim(), ProductSearchMode.Mapping)
                 {
                     Owner = Window.GetWindow(this)
                 };
@@ -1776,8 +1801,44 @@ namespace SmartSembakoAssistant.Views
             return new MappingTransferService(_configService, _databaseService, _posDbService);
         }
 
+        private void SetMappingTransferBusy(bool busy, string? status = null)
+        {
+            _mappingTransferBusy = busy;
+            BtnExportMappingPackage.IsEnabled = !busy && _posDbService != null;
+            BtnImportMappingPackage.IsEnabled = !busy && _posDbService != null;
+            BtnApplyMappingImport.IsEnabled = !busy && _posDbService != null && _lastMappingImportPreview != null;
+            CmbMappingImportMode.IsEnabled = !busy && _posDbService != null;
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                TxtMappingTransferStatus.Text = status;
+            }
+        }
+
+        private void SetSharedStockBusy(bool busy, string? status = null)
+        {
+            _sharedStockBusy = busy;
+            bool ready = !busy && _posDbService != null;
+            TxtSharedStockGroupName.IsEnabled = ready;
+            TxtSharedStockPrimaryName.IsEnabled = ready;
+            TxtSharedStockSecondName.IsEnabled = ready;
+            BtnSearchSharedStockPrimary.IsEnabled = ready;
+            BtnSearchSharedStockSecond.IsEnabled = ready;
+            BtnAddSharedStock.IsEnabled = ready;
+            BtnRefreshSharedStock.IsEnabled = ready;
+            DgSharedStock.IsEnabled = ready;
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                TxtSharedStockStatus.Text = status;
+            }
+        }
+
         private async void BtnExportMappingPackage_Click(object sender, RoutedEventArgs e)
         {
+            if (_mappingTransferBusy)
+            {
+                return;
+            }
+
             try
             {
                 var dialog = new SaveFileDialog
@@ -1792,6 +1853,7 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
+                SetMappingTransferBusy(true, "Export mapping package...");
                 await CreateMappingTransferService().SaveExportPackageAsync(dialog.FileName);
                 TxtMappingTransferStatus.Text = $"Export mapping package selesai: {dialog.FileName}";
                 ToastHelper.ShowSuccess("Mapping Transfer", "Export mapping package selesai.");
@@ -1801,10 +1863,19 @@ namespace SmartSembakoAssistant.Views
                 TxtMappingTransferStatus.Text = $"Export gagal: {ex.Message}";
                 ToastHelper.ShowError("Mapping Transfer", ex.Message);
             }
+            finally
+            {
+                SetMappingTransferBusy(false);
+            }
         }
 
         private async void BtnImportMappingPackage_Click(object sender, RoutedEventArgs e)
         {
+            if (_mappingTransferBusy)
+            {
+                return;
+            }
+
             try
             {
                 var dialog = new OpenFileDialog
@@ -1818,6 +1889,7 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
+                SetMappingTransferBusy(true, "Membuat preview import...");
                 _lastMappingImportPreview = await CreateMappingTransferService()
                     .PreviewImportAsync(dialog.FileName, GetSelectedMappingImportMode());
                 _mappingImportPreviewRows.Clear();
@@ -1833,6 +1905,10 @@ namespace SmartSembakoAssistant.Views
             {
                 TxtMappingTransferStatus.Text = $"Import preview gagal: {ex.Message}";
                 ToastHelper.ShowError("Mapping Transfer", ex.Message);
+            }
+            finally
+            {
+                SetMappingTransferBusy(false);
             }
         }
 
@@ -1857,6 +1933,7 @@ namespace SmartSembakoAssistant.Views
                     return;
                 }
 
+                SetMappingTransferBusy(true, "Apply import mapping...");
                 var summary = await CreateMappingTransferService().ApplyImportAsync(_lastMappingImportPreview);
                 TxtMappingTransferStatus.Text = $"Apply selesai: {summary}";
                 await RefreshOcrMappingRegistryAsync();
@@ -1868,6 +1945,10 @@ namespace SmartSembakoAssistant.Views
             {
                 TxtMappingTransferStatus.Text = $"Apply import gagal: {ex.Message}";
                 ToastHelper.ShowError("Mapping Transfer", ex.Message);
+            }
+            finally
+            {
+                SetMappingTransferBusy(false);
             }
         }
 
@@ -2028,14 +2109,19 @@ namespace SmartSembakoAssistant.Views
 
         private async void BtnRefreshSharedStock_Click(object sender, RoutedEventArgs e)
         {
-            BtnRefreshSharedStock.IsEnabled = false;
+            if (_sharedStockBusy)
+            {
+                return;
+            }
+
+            SetSharedStockBusy(true, "Memuat shared stock...");
             try
             {
                 await RefreshSharedStockGroupsAsync();
             }
             finally
             {
-                BtnRefreshSharedStock.IsEnabled = _posDbService != null;
+                SetSharedStockBusy(false);
             }
         }
 
@@ -2065,6 +2151,11 @@ namespace SmartSembakoAssistant.Views
 
         private async void BtnAddSharedStock_Click(object sender, RoutedEventArgs e)
         {
+            if (_sharedStockBusy)
+            {
+                return;
+            }
+
             if (_posDbService == null)
             {
                 ToastHelper.ShowError("Shared Stock", "Database pos.db belum siap.");
@@ -2093,6 +2184,7 @@ namespace SmartSembakoAssistant.Views
 
             try
             {
+                SetSharedStockBusy(true, "Menyimpan shared stock...");
                 var primary = await _posDbService.GetProductByIdAsync(_selectedSharedStockPrimaryProductId);
                 var second = await _posDbService.GetProductByIdAsync(_selectedSharedStockSecondProductId);
                 if (primary == null || second == null)
@@ -2148,34 +2240,63 @@ namespace SmartSembakoAssistant.Views
             {
                 ToastHelper.ShowError("Shared Stock", ex.Message);
             }
+            finally
+            {
+                SetSharedStockBusy(false);
+            }
         }
 
         private async void BtnSyncSharedStockPrimary_Click(object sender, RoutedEventArgs e)
         {
+            if (_sharedStockBusy)
+            {
+                return;
+            }
+
             try
             {
+                SetSharedStockBusy(true, "Sync shared stock...");
                 await SyncSharedStockGroupAsync((sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty, useLargestStock: false);
             }
             catch (Exception ex)
             {
                 ToastHelper.ShowError("Shared Stock", ex.Message);
             }
+            finally
+            {
+                SetSharedStockBusy(false);
+            }
         }
 
         private async void BtnSyncSharedStockLargest_Click(object sender, RoutedEventArgs e)
         {
+            if (_sharedStockBusy)
+            {
+                return;
+            }
+
             try
             {
+                SetSharedStockBusy(true, "Sync shared stock...");
                 await SyncSharedStockGroupAsync((sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty, useLargestStock: true);
             }
             catch (Exception ex)
             {
                 ToastHelper.ShowError("Shared Stock", ex.Message);
             }
+            finally
+            {
+                SetSharedStockBusy(false);
+            }
         }
 
         private async void BtnToggleSharedStock_Click(object sender, RoutedEventArgs e)
         {
+            if (_sharedStockBusy)
+            {
+                return;
+            }
+
             string groupId = (sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(groupId))
             {
@@ -2184,6 +2305,7 @@ namespace SmartSembakoAssistant.Views
 
             try
             {
+                SetSharedStockBusy(true, "Mengubah status shared stock...");
                 var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: true);
                 var group = groups.FirstOrDefault(item => string.Equals(item.Id, groupId, StringComparison.OrdinalIgnoreCase));
                 if (group == null)
@@ -2198,10 +2320,19 @@ namespace SmartSembakoAssistant.Views
             {
                 ToastHelper.ShowError("Shared Stock", ex.Message);
             }
+            finally
+            {
+                SetSharedStockBusy(false);
+            }
         }
 
         private async void BtnDeleteSharedStock_Click(object sender, RoutedEventArgs e)
         {
+            if (_sharedStockBusy)
+            {
+                return;
+            }
+
             string groupId = (sender as FrameworkElement)?.Tag?.ToString() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(groupId))
             {
@@ -2210,6 +2341,7 @@ namespace SmartSembakoAssistant.Views
 
             try
             {
+                SetSharedStockBusy(true, "Menghapus shared stock...");
                 var groups = await _databaseService.GetAllSharedStockGroupsAsync(includeDisabled: true);
                 var group = groups.FirstOrDefault(item => string.Equals(item.Id, groupId, StringComparison.OrdinalIgnoreCase));
                 if (group == null)
@@ -2234,6 +2366,10 @@ namespace SmartSembakoAssistant.Views
             catch (Exception ex)
             {
                 ToastHelper.ShowError("Shared Stock", ex.Message);
+            }
+            finally
+            {
+                SetSharedStockBusy(false);
             }
         }
 
@@ -2272,7 +2408,7 @@ namespace SmartSembakoAssistant.Views
             try
             {
                 var products = await _posDbService.GetAllProductsAsync();
-                var picker = new ProductSearchWindow(products, queueItem.RawProductName)
+                var picker = new ProductSearchWindow(products, queueItem.RawProductName, ProductSearchMode.Mapping)
                 {
                     Owner = Window.GetWindow(this)
                 };

@@ -782,7 +782,9 @@
                             <DataGridTextColumn Header="Group" Width="170" Binding="{Binding GroupName}"/>
                             <DataGridTextColumn Header="Members" Width="*" Binding="{Binding MembersSummary}"/>
                             <DataGridTextColumn Header="Stok" Width="220" Binding="{Binding StockSummary}"/>
-                            <DataGridTextColumn Header="Status" Width="90" Binding="{Binding StatusText}"/>
+                            <DataGridTextColumn Header="Delta" Width="90" Binding="{Binding DeltaSummary}"/>
+                            <DataGridTextColumn Header="Member Status" Width="150" Binding="{Binding MemberStatusSummary}"/>
+                            <DataGridTextColumn Header="Status" Width="100" Binding="{Binding StatusText}"/>
                             <DataGridTemplateColumn Header="" Width="300">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
