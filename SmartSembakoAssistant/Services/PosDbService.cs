@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -269,6 +270,65 @@ namespace SmartSembakoAssistant.Services
                 6 => "Loss",
                 _ => $"Tipe {documentTypeId}"
             };
+        }
+
+        private static string BuildAroniumLineTotalSql(string itemAlias = "di")
+        {
+            return $"COALESCE({itemAlias}.TotalAfterDocumentDiscount, {itemAlias}.Total, {itemAlias}.PriceAfterDiscount * {itemAlias}.Quantity, {itemAlias}.Price * {itemAlias}.Quantity, 0)";
+        }
+
+        private static string BuildAroniumLineTotalBeforeDocumentDiscountSql(string itemAlias = "di")
+        {
+            return $"COALESCE({itemAlias}.Total, {itemAlias}.PriceAfterDiscount * {itemAlias}.Quantity, {itemAlias}.Price * {itemAlias}.Quantity, 0)";
+        }
+
+        private static string BuildAroniumLineGrossTotalSql(string itemAlias = "di")
+        {
+            return $"COALESCE({itemAlias}.Price, 0) * COALESCE({itemAlias}.Quantity, 0)";
+        }
+
+        private static string BuildAroniumLineCostSql(string itemAlias = "di")
+        {
+            return $"COALESCE({itemAlias}.ProductCost, 0) * COALESCE({itemAlias}.Quantity, 0)";
+        }
+
+        private static string BuildAroniumProfitSql(string itemAlias = "di")
+        {
+            return $"{BuildAroniumLineTotalSql(itemAlias)} - ({BuildAroniumLineCostSql(itemAlias)})";
+        }
+
+        private static string BuildLineTaxAmountSql(string itemAlias = "di")
+        {
+            return $"COALESCE((SELECT SUM(tx.Amount) FROM DocumentItemTax tx WHERE tx.DocumentItemId = {itemAlias}.Id), 0)";
+        }
+
+        private static string BuildPromotionRule(decimal quantity, decimal quantityLimit, decimal value, int discountType, bool isConditional)
+        {
+            if (isConditional && quantity > 0 && quantityLimit > 0 && discountType == 0 && value >= 100)
+            {
+                return $"Beli {quantity:0.##} gratis {quantityLimit:0.##}";
+            }
+
+            if (discountType == 0)
+            {
+                string prefix = isConditional && quantity > 0
+                    ? $"Saat beli minimal {quantity:0.##}, "
+                    : string.Empty;
+                return $"{prefix}diskon {value:0.##}%".Trim();
+            }
+
+            string fixedText = value > 0 ? $"Rp {value:N0}" : "nominal tertentu";
+            return isConditional && quantity > 0
+                ? $"Saat beli minimal {quantity:0.##}, diskon {fixedText}"
+                : $"Diskon {fixedText}";
+        }
+
+        private static string BuildTaxRule(decimal rate, bool isFixed, bool isTaxOnTotal)
+        {
+            string valueText = isFixed ? $"Rp {rate:N0}" : $"{rate:0.##}%";
+            return isTaxOnTotal
+                ? $"{valueText} dari total nota"
+                : valueText;
         }
 
         private sealed class ProductSchemaMetadata
@@ -812,16 +872,24 @@ namespace SmartSembakoAssistant.Services
 
                 var tables = await GetAvailableTablesAsync(connection);
                 string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
 
                 if (string.IsNullOrEmpty(documentTable))
                     return 0;
 
                 // Aronium: DocumentTypeId = 2 adalah Sales (kode 200)
-                string sql = $@"
-                    SELECT COALESCE(SUM(Total), 0)
-                    FROM {ValidateTableName(documentTable)}
-                    WHERE date(Date) = date('now', 'localtime')
-                    AND DocumentTypeId = 2";
+                string sql = string.IsNullOrEmpty(documentItemTable)
+                    ? $@"
+                        SELECT COALESCE(SUM(Total), 0)
+                        FROM {ValidateTableName(documentTable)}
+                        WHERE date(Date) = date('now', 'localtime')
+                        AND DocumentTypeId = 2"
+                    : $@"
+                        SELECT COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0)
+                        FROM {ValidateTableName(documentItemTable)} di
+                        INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
+                        WHERE date(d.Date) = date('now', 'localtime')
+                        AND d.DocumentTypeId = 2";
 
                 using var command = new SqliteCommand(sql, connection);
                 var result = await command.ExecuteScalarAsync();
@@ -852,12 +920,8 @@ namespace SmartSembakoAssistant.Services
                 if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
                     return 0;
 
-                // Aronium: DocumentTypeId = 2 adalah Sales (kode 200)
-                // Profit = (Price - ProductCost) * Quantity
                 string sql = $@"
-                    SELECT COALESCE(SUM(
-                        (di.Price - di.ProductCost) * di.Quantity
-                    ), 0)
+                    SELECT COALESCE(SUM({BuildAroniumProfitSql("di")}), 0)
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
                     WHERE date(d.Date) = date('now', 'localtime')
@@ -890,6 +954,7 @@ namespace SmartSembakoAssistant.Services
 
                 var tables = await GetAvailableTablesAsync(connection);
                 string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
 
                 if (string.IsNullOrEmpty(documentTable))
                     return 0;
@@ -927,6 +992,7 @@ namespace SmartSembakoAssistant.Services
 
                 var tables = await GetAvailableTablesAsync(connection);
                 string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
 
                 if (string.IsNullOrEmpty(documentTable))
                     return 0;
@@ -1863,7 +1929,7 @@ namespace SmartSembakoAssistant.Services
                         {productNameSql} as ProductName,
                         {unitSql} as Unit,
                         COALESCE(SUM(di.Quantity), 0) as Quantity,
-                        COALESCE(SUM(di.Total), 0) as Total,
+                        COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0) as Total,
                         COUNT(DISTINCT d.Id) as TransactionCount
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
@@ -2053,8 +2119,8 @@ namespace SmartSembakoAssistant.Services
                         di.ProductId,
                         {productNameSql},
                         COALESCE(SUM(di.Quantity), 0) as TotalQty,
-                        COALESCE(SUM(di.Total), 0) as TotalRevenue,
-                        COALESCE(SUM((di.Price - di.ProductCost) * di.Quantity), 0) as TotalProfit,
+                        COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0) as TotalRevenue,
+                        COALESCE(SUM({BuildAroniumProfitSql("di")}), 0) as TotalProfit,
                         MAX(d.Date) as LastSaleDate
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
@@ -2130,9 +2196,10 @@ namespace SmartSembakoAssistant.Services
                         {customerSelect},
                         {userSelect},
                         di.Quantity,
-                        di.Price,
+                        COALESCE(di.PriceAfterDiscount, di.Price) as Price,
                         di.ProductCost,
-                        di.Total
+                        {BuildAroniumLineTotalSql("di")} as LineTotal,
+                        {BuildAroniumProfitSql("di")} as Profit
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
                     {customerJoin}
@@ -2152,6 +2219,7 @@ namespace SmartSembakoAssistant.Services
                     decimal qty = SafeConvertToDecimal(reader, 5) ?? 0;
                     decimal price = SafeConvertToDecimal(reader, 6) ?? 0;
                     decimal productCost = SafeConvertToDecimal(reader, 7) ?? 0;
+                    decimal total = SafeConvertToDecimal(reader, 8) ?? 0;
 
                     transactions.Add(new ProductSalesTransaction
                     {
@@ -2163,8 +2231,8 @@ namespace SmartSembakoAssistant.Services
                         Quantity = qty,
                         Price = price,
                         ProductCost = productCost,
-                        Total = SafeConvertToDecimal(reader, 8) ?? 0,
-                        Profit = (price - productCost) * qty
+                        Total = total,
+                        Profit = SafeConvertToDecimal(reader, 9) ?? (total - productCost * qty)
                     });
                 }
             }
@@ -2869,7 +2937,7 @@ namespace SmartSembakoAssistant.Services
                         {GetProductUnitSql("p")} as Unit,
                         pg.Name as Category,
                         ROUND(COALESCE(SUM(di.Quantity), 0), 1) as Qty30Days,
-                        CAST(COALESCE(SUM(di.Total), 0) as INTEGER) as Revenue30Days,
+                        CAST(COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0) as INTEGER) as Revenue30Days,
                         MAX(d.Date) as LastSaleDate
                     FROM {ValidateTableName(productTable)} p
                     LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
@@ -2959,7 +3027,7 @@ namespace SmartSembakoAssistant.Services
                             {GetProductUnitSql("p")} as Unit,
                             pg.Name as Category,
                             ROUND(COALESCE(SUM(di.Quantity), 0), 1) as QtySold,
-                            CAST(COALESCE(SUM(di.Total), 0) as INTEGER) as Revenue,
+                            CAST(COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0) as INTEGER) as Revenue,
                             MAX(d.Date) as LastSaleDate
                         FROM {ValidateTableName(productTable)} p
                         LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
@@ -5073,15 +5141,24 @@ namespace SmartSembakoAssistant.Services
                 await connection.OpenAsync();
 
                 string sql = $@"
-                    SELECT p.Id, p.Name, {GetProductUnitSql("p")}, s.Quantity
+                    SELECT
+                        p.Id,
+                        p.Name,
+                        p.Code,
+                        pg.Name as Category,
+                        {GetProductUnitSql("p")},
+                        COALESCE(s.Quantity, 0) as Stock,
+                        p.Cost,
+                        p.Price,
+                        p.IsEnabled
                     FROM Product p
                     LEFT JOIN Stock s
                         ON p.Id = s.ProductId
                        AND s.WarehouseId = {PreferredWarehouseIdSql}
+                    LEFT JOIN ProductGroup pg ON p.ProductGroupId = pg.Id
                     WHERE p.IsEnabled = 1
-                    AND (s.Quantity <= 0 OR s.Quantity IS NULL)
-                    ORDER BY s.Quantity ASC
-                    LIMIT 10";
+                    AND (COALESCE(s.Quantity, 0) <= 10)
+                    ORDER BY COALESCE(s.Quantity, 0) ASC, p.Name";
 
                 using var cmd = new SqliteCommand(sql, connection);
                 using var reader = await cmd.ExecuteReaderAsync();
@@ -5092,8 +5169,13 @@ namespace SmartSembakoAssistant.Services
                     {
                         Id = reader.IsDBNull(0) ? null : reader.GetValue(0).ToString(),
                         Name = reader.IsDBNull(1) ? null : reader.GetString(1),
-                        Unit = reader.IsDBNull(2) ? "Pcs" : reader.GetString(2),
-                        Stock = SafeConvertToDecimal(reader, 3) ?? 0
+                        Sku = reader.IsDBNull(2) ? null : reader.GetValue(2).ToString(),
+                        Category = reader.IsDBNull(3) ? null : reader.GetValue(3).ToString(),
+                        Unit = reader.IsDBNull(4) ? "Pcs" : reader.GetString(4),
+                        Stock = SafeConvertToDecimal(reader, 5) ?? 0,
+                        PurchasePrice = SafeConvertToDecimal(reader, 6),
+                        SellingPrice = SafeConvertToDecimal(reader, 7),
+                        IsActive = reader.IsDBNull(8) || Convert.ToBoolean(reader.GetValue(8))
                     });
                 }
             }
@@ -5185,6 +5267,7 @@ namespace SmartSembakoAssistant.Services
 
                 var tables = await GetAvailableTablesAsync(connection);
                 string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
 
                 if (string.IsNullOrEmpty(documentTable))
                     return 0;
@@ -5192,12 +5275,20 @@ namespace SmartSembakoAssistant.Services
                 string startDateStr = startDate.ToString("yyyy-MM-dd");
                 string endDateStr = endDate.ToString("yyyy-MM-dd");
 
-                string sql = $@"
-                    SELECT COALESCE(SUM(Total), 0)
-                    FROM {ValidateTableName(documentTable)}
-                    WHERE DocumentTypeId = 2
-                    AND date(Date) >= @startDate
-                    AND date(Date) <= @endDate";
+                string sql = string.IsNullOrEmpty(documentItemTable)
+                    ? $@"
+                        SELECT COALESCE(SUM(Total), 0)
+                        FROM {ValidateTableName(documentTable)}
+                        WHERE DocumentTypeId = 2
+                        AND date(Date) >= @startDate
+                        AND date(Date) <= @endDate"
+                    : $@"
+                        SELECT COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0)
+                        FROM {ValidateTableName(documentItemTable)} di
+                        INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
+                        WHERE d.DocumentTypeId = 2
+                        AND date(d.Date) >= @startDate
+                        AND date(d.Date) <= @endDate";
 
                 using var command = new SqliteCommand(sql, connection);
                 command.Parameters.AddWithValue("@startDate", startDateStr);
@@ -5219,7 +5310,7 @@ namespace SmartSembakoAssistant.Services
         }
 
         /// <summary>
-        /// Menghitung total profit dari transaksi sales: SUM((Price - ProductCost) * Quantity)
+        /// Menghitung total profit dari transaksi sales sesuai Aronium Profit Report.
         /// </summary>
         public async Task<decimal> GetSalesProfitAsync(DateTime startDate, DateTime endDate)
         {
@@ -5239,9 +5330,7 @@ namespace SmartSembakoAssistant.Services
                 string endDateStr = endDate.ToString("yyyy-MM-dd");
 
                 string sql = $@"
-                    SELECT COALESCE(SUM(
-                        (di.Price - di.ProductCost) * di.Quantity
-                    ), 0)
+                    SELECT COALESCE(SUM({BuildAroniumProfitSql("di")}), 0)
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
                     WHERE d.DocumentTypeId = 2
@@ -5390,8 +5479,8 @@ namespace SmartSembakoAssistant.Services
 
                 string sql = $@"
                     SELECT
-                        COALESCE(SUM(di.Total), 0) as Revenue,
-                        COALESCE(SUM(CASE WHEN COALESCE(di.ProductCost, 0) <= 0 THEN di.Total ELSE 0 END), 0) as NoCostRevenue
+                        COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0) as Revenue,
+                        COALESCE(SUM(CASE WHEN COALESCE(di.ProductCost, 0) <= 0 THEN {BuildAroniumLineTotalSql("di")} ELSE 0 END), 0) as NoCostRevenue
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
                     WHERE d.DocumentTypeId = 2
@@ -5448,9 +5537,12 @@ namespace SmartSembakoAssistant.Services
                 string sql = $@"
                     SELECT
                         COUNT(DISTINCT d.Id) as TransactionCount,
-                        COALESCE(SUM(di.Total), 0) as Revenue,
-                        COALESCE(SUM(di.ProductCost * di.Quantity), 0) as CostOfGoodsSold,
-                        COALESCE(SUM((di.Price - di.ProductCost) * di.Quantity), 0) as GrossProfit
+                        COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0) as Revenue,
+                        COALESCE(SUM({BuildAroniumLineCostSql("di")}), 0) as CostOfGoodsSold,
+                        COALESCE(SUM({BuildAroniumProfitSql("di")}), 0) as GrossProfit,
+                        COALESCE(SUM(({BuildAroniumLineGrossTotalSql("di")}) - ({BuildAroniumLineTotalBeforeDocumentDiscountSql("di")})), 0) as ItemDiscountAmount,
+                        COALESCE(SUM(({BuildAroniumLineTotalBeforeDocumentDiscountSql("di")}) - ({BuildAroniumLineTotalSql("di")})), 0) as DocumentDiscountAmount,
+                        COALESCE(SUM({BuildLineTaxAmountSql("di")}), 0) as TaxAmount
                     FROM {ValidateTableName(documentTable)} d
                     INNER JOIN {ValidateTableName(documentItemTable)} di ON d.Id = di.DocumentId
                     WHERE d.DocumentTypeId = 2
@@ -5468,6 +5560,10 @@ namespace SmartSembakoAssistant.Services
                     summary.Revenue = SafeConvertToDecimal(reader, 1) ?? 0;
                     summary.CostOfGoodsSold = SafeConvertToDecimal(reader, 2) ?? 0;
                     summary.GrossProfit = SafeConvertToDecimal(reader, 3) ?? 0;
+                    summary.ItemDiscountAmount = SafeConvertToDecimal(reader, 4) ?? 0;
+                    summary.DocumentDiscountAmount = SafeConvertToDecimal(reader, 5) ?? 0;
+                    summary.TaxAmount = SafeConvertToDecimal(reader, 6) ?? 0;
+                    summary.ProfitAfterTax = summary.GrossProfit - summary.TaxAmount;
                 }
             }
             catch (Exception ex)
@@ -5480,6 +5576,471 @@ namespace SmartSembakoAssistant.Services
             }
 
             return summary;
+        }
+
+        public async Task<SalesProfitBreakdown> GetSalesProfitBreakdownAsync(DateTime startDate, DateTime endDate)
+        {
+            var breakdown = new SalesProfitBreakdown
+            {
+                StartDate = startDate.Date,
+                EndDate = endDate.Date
+            };
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                if (string.IsNullOrEmpty(documentTable) || string.IsNullOrEmpty(documentItemTable))
+                {
+                    return breakdown;
+                }
+
+                string lineTotalSql = BuildAroniumLineTotalSql("di");
+                string costSql = BuildAroniumLineCostSql("di");
+                string grossTotalSql = BuildAroniumLineGrossTotalSql("di");
+                string totalBeforeDocDiscountSql = BuildAroniumLineTotalBeforeDocumentDiscountSql("di");
+                string profitSql = BuildAroniumProfitSql("di");
+                string taxSql = BuildLineTaxAmountSql("di");
+
+                string sql = $@"
+                    SELECT
+                        COUNT(DISTINCT d.Id) as TransactionCount,
+                        COALESCE(SUM({lineTotalSql}), 0) as Revenue,
+                        COALESCE(SUM({costSql}), 0) as Cost,
+                        COALESCE(SUM({profitSql}), 0) as AroniumProfit,
+                        COALESCE(SUM({taxSql}), 0) as TaxAmount,
+                        COALESCE(SUM(({grossTotalSql}) - ({totalBeforeDocDiscountSql})), 0) as ItemDiscountAmount,
+                        COALESCE(SUM(({totalBeforeDocDiscountSql}) - ({lineTotalSql})), 0) as DocumentDiscountAmount,
+                        COALESCE(SUM(CASE WHEN COALESCE(di.ProductCost, 0) <= 0 THEN {lineTotalSql} ELSE 0 END), 0) as NoCostRevenue,
+                        COALESCE(SUM(CASE WHEN COALESCE(di.ProductCost, 0) <= 0 THEN {profitSql} ELSE 0 END), 0) as NoCostProfit,
+                        COALESCE(SUM(CASE WHEN COALESCE(di.ProductCost, 0) <= 0 THEN 1 ELSE 0 END), 0) as NoCostItemCount,
+                        COALESCE(SUM(di.Quantity), 0) as ItemsSold
+                    FROM {ValidateTableName(documentTable)} d
+                    INNER JOIN {ValidateTableName(documentItemTable)} di ON d.Id = di.DocumentId
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) >= @startDate
+                      AND date(d.Date) <= @endDate";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", breakdown.StartDate.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", breakdown.EndDate.ToString("yyyy-MM-dd"));
+
+                using var reader = await command.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    breakdown.TransactionCount = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0));
+                    breakdown.Revenue = SafeConvertToDecimal(reader, 1) ?? 0;
+                    breakdown.Cost = SafeConvertToDecimal(reader, 2) ?? 0;
+                    breakdown.AroniumProfit = SafeConvertToDecimal(reader, 3) ?? 0;
+                    breakdown.TaxAmount = SafeConvertToDecimal(reader, 4) ?? 0;
+                    breakdown.ProfitAfterTax = breakdown.AroniumProfit - breakdown.TaxAmount;
+                    breakdown.ItemDiscountAmount = SafeConvertToDecimal(reader, 5) ?? 0;
+                    breakdown.DocumentDiscountAmount = SafeConvertToDecimal(reader, 6) ?? 0;
+                    breakdown.NoCostRevenue = SafeConvertToDecimal(reader, 7) ?? 0;
+                    breakdown.NoCostProfit = SafeConvertToDecimal(reader, 8) ?? 0;
+                    breakdown.NoCostItemCount = reader.IsDBNull(9) ? 0 : Convert.ToInt32(reader.GetValue(9));
+                    breakdown.ItemsSold = SafeConvertToDecimal(reader, 10) ?? 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error calculating sales profit breakdown: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return breakdown;
+        }
+
+        public async Task<List<ActivePromotionInfo>> GetActivePromotionsAsync(DateTime? at = null)
+        {
+            var promotions = new List<ActivePromotionInfo>();
+            DateTime target = at ?? DateTime.Today;
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? promotionTable = FindTable(tables, new[] { "Promotion", "promotions" });
+                string? promotionItemTable = FindTable(tables, new[] { "PromotionItem", "promotion_items" });
+                string? productTable = FindTable(tables, new[] { "Product", "products" });
+                if (string.IsNullOrEmpty(promotionTable) ||
+                    string.IsNullOrEmpty(promotionItemTable) ||
+                    string.IsNullOrEmpty(productTable))
+                {
+                    return promotions;
+                }
+
+                int dayBit = 1 << (int)target.DayOfWeek;
+                string sql = $@"
+                    SELECT
+                        pr.Id,
+                        pr.Name,
+                        pi.Uid,
+                        COALESCE(p.Name, '') as ProductName,
+                        pi.Value,
+                        pi.DiscountType,
+                        pi.IsConditional,
+                        pi.Quantity,
+                        pi.QuantityLimit,
+                        pr.StartDate,
+                        pr.EndDate
+                    FROM {ValidateTableName(promotionTable)} pr
+                    INNER JOIN {ValidateTableName(promotionItemTable)} pi ON pi.PromotionId = pr.Id
+                    LEFT JOIN {ValidateTableName(productTable)} p ON p.Id = pi.Uid
+                    WHERE pr.IsEnabled = 1
+                      AND (pr.StartDate IS NULL OR date(pr.StartDate) <= @date)
+                      AND (pr.EndDate IS NULL OR date(pr.EndDate) >= @date)
+                      AND (pr.StartTime IS NULL OR time(pr.StartTime) <= @time)
+                      AND (pr.EndTime IS NULL OR time(pr.EndTime) >= @time)
+                      AND (pr.DaysOfWeek IS NULL OR pr.DaysOfWeek = 0 OR (pr.DaysOfWeek & @dayBit) != 0)
+                    ORDER BY pr.Name, p.Name";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@date", target.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@time", target.ToString("HH:mm:ss"));
+                command.Parameters.AddWithValue("@dayBit", dayBit);
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    decimal value = SafeConvertToDecimal(reader, 4) ?? 0;
+                    int discountType = reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5));
+                    bool isConditional = !reader.IsDBNull(6) && Convert.ToInt32(reader.GetValue(6)) != 0;
+                    decimal quantity = SafeConvertToDecimal(reader, 7) ?? 0;
+                    decimal quantityLimit = SafeConvertToDecimal(reader, 8) ?? 0;
+
+                    promotions.Add(new ActivePromotionInfo
+                    {
+                        PromotionId = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0)),
+                        PromotionName = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                        ProductId = reader.IsDBNull(2) ? "" : reader.GetValue(2).ToString() ?? "",
+                        ProductName = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Value = value,
+                        DiscountType = discountType,
+                        IsConditional = isConditional,
+                        Quantity = quantity,
+                        QuantityLimit = quantityLimit,
+                        StartDate = SafeConvertToDateTime(reader, 9),
+                        EndDate = SafeConvertToDateTime(reader, 10),
+                        HumanReadableRule = BuildPromotionRule(quantity, quantityLimit, value, discountType, isConditional)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading active promotions: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return promotions;
+        }
+
+        public async Task<List<ActivePromotionInfo>> GetProductPromotionStatusAsync(string productIdOrName, DateTime? at = null)
+        {
+            if (string.IsNullOrWhiteSpace(productIdOrName))
+            {
+                return new List<ActivePromotionInfo>();
+            }
+
+            var activePromotions = await GetActivePromotionsAsync(at);
+            string query = productIdOrName.Trim();
+
+            return activePromotions
+                .Where(p =>
+                    string.Equals(p.ProductId, query, StringComparison.OrdinalIgnoreCase) ||
+                    p.ProductName.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        public async Task<List<ActiveTaxInfo>> GetActiveTaxesAsync()
+        {
+            var taxes = new List<ActiveTaxInfo>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync();
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? taxTable = FindTable(tables, new[] { "Tax", "taxes" });
+                string? productTaxTable = FindTable(tables, new[] { "ProductTax", "product_taxes" });
+                if (string.IsNullOrEmpty(taxTable))
+                {
+                    return taxes;
+                }
+
+                string productTaxJoin = string.IsNullOrEmpty(productTaxTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(productTaxTable)} pt ON pt.TaxId = t.Id";
+                string linkedCountSql = string.IsNullOrEmpty(productTaxTable)
+                    ? "0"
+                    : "COUNT(pt.ProductId)";
+
+                string sql = $@"
+                    SELECT
+                        t.Id,
+                        t.Name,
+                        t.Rate,
+                        t.IsFixed,
+                        t.IsTaxOnTotal,
+                        t.IsEnabled,
+                        {linkedCountSql} as LinkedProductCount
+                    FROM {ValidateTableName(taxTable)} t
+                    {productTaxJoin}
+                    WHERE t.IsEnabled = 1
+                    GROUP BY t.Id, t.Name, t.Rate, t.IsFixed, t.IsTaxOnTotal, t.IsEnabled
+                    ORDER BY t.Name";
+
+                using var command = new SqliteCommand(sql, connection);
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    decimal rate = SafeConvertToDecimal(reader, 2) ?? 0;
+                    bool isFixed = !reader.IsDBNull(3) && Convert.ToInt32(reader.GetValue(3)) != 0;
+                    bool isTaxOnTotal = !reader.IsDBNull(4) && Convert.ToInt32(reader.GetValue(4)) != 0;
+
+                    taxes.Add(new ActiveTaxInfo
+                    {
+                        TaxId = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0)),
+                        Name = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                        Rate = rate,
+                        IsFixed = isFixed,
+                        IsTaxOnTotal = isTaxOnTotal,
+                        IsEnabled = !reader.IsDBNull(5) && Convert.ToInt32(reader.GetValue(5)) != 0,
+                        LinkedProductCount = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6)),
+                        HumanReadableRule = BuildTaxRule(rate, isFixed, isTaxOnTotal)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading active taxes: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return taxes;
+        }
+
+        public async Task<ProfitExplanationContext> GetProfitExplanationContextAsync(
+            DateTime startDate,
+            DateTime endDate,
+            string? productQuery = null,
+            CancellationToken cancellationToken = default)
+        {
+            var breakdownTask = GetSalesProfitBreakdownAsync(startDate, endDate);
+            var promotionsTask = GetActivePromotionsAsync(DateTime.Today);
+            var taxesTask = GetActiveTaxesAsync();
+
+            await Task.WhenAll(breakdownTask, promotionsTask, taxesTask);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var breakdown = await breakdownTask;
+            var promotions = await promotionsTask;
+            var taxes = await taxesTask;
+            var notableCases = await GetProductProfitCasesAsync(startDate, endDate, productQuery, promotions, cancellationToken);
+
+            return new ProfitExplanationContext
+            {
+                StartDate = startDate.Date,
+                EndDate = endDate.Date,
+                RevenueAfterDiscount = breakdown.Revenue,
+                CostOfGoodsSold = breakdown.Cost,
+                AroniumProfit = breakdown.AroniumProfit,
+                ItemDiscountAmount = breakdown.ItemDiscountAmount,
+                DocumentDiscountAmount = breakdown.DocumentDiscountAmount,
+                TaxAmount = breakdown.TaxAmount,
+                ProfitAfterTax = breakdown.ProfitAfterTax,
+                TransactionCount = breakdown.TransactionCount,
+                ItemsSold = breakdown.ItemsSold,
+                NotableCases = notableCases,
+                ActivePromotions = promotions,
+                ActiveTaxes = taxes
+            };
+        }
+
+        private async Task<List<ProductProfitCase>> GetProductProfitCasesAsync(
+            DateTime startDate,
+            DateTime endDate,
+            string? productQuery,
+            List<ActivePromotionInfo> activePromotions,
+            CancellationToken cancellationToken)
+        {
+            var cases = new List<ProductProfitCase>();
+
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={_dbPath}");
+                await connection.OpenAsync(cancellationToken);
+
+                var tables = await GetAvailableTablesAsync(connection);
+                string? documentTable = FindTable(tables, new[] { "Document", "documents", "transaksi" });
+                string? documentItemTable = FindTable(tables, new[] { "DocumentItem", "document_items" });
+                string? productTable = FindTable(tables, new[] { "Product", "products" });
+                if (string.IsNullOrEmpty(documentTable) ||
+                    string.IsNullOrEmpty(documentItemTable) ||
+                    string.IsNullOrEmpty(productTable))
+                {
+                    return cases;
+                }
+
+                string lineTotalSql = BuildAroniumLineTotalSql("di");
+                string costSql = BuildAroniumLineCostSql("di");
+                string grossTotalSql = BuildAroniumLineGrossTotalSql("di");
+                string profitSql = BuildAroniumProfitSql("di");
+                bool hasProductQuery = !string.IsNullOrWhiteSpace(productQuery);
+                string filterSql = hasProductQuery
+                    ? "AND (CAST(p.Id AS TEXT) = @productQueryExact OR p.Name LIKE @productQueryLike)"
+                    : string.Empty;
+
+                string sql = $@"
+                    SELECT
+                        p.Id,
+                        p.Name,
+                        COALESCE(SUM(di.Quantity), 0) as Quantity,
+                        COALESCE(SUM({grossTotalSql}), 0) as GrossTotal,
+                        COALESCE(SUM({lineTotalSql}), 0) as RevenueAfterDiscount,
+                        COALESCE(SUM({costSql}), 0) as Cost,
+                        COALESCE(SUM({profitSql}), 0) as Profit
+                    FROM {ValidateTableName(documentItemTable)} di
+                    INNER JOIN {ValidateTableName(documentTable)} d ON d.Id = di.DocumentId
+                    INNER JOIN {ValidateTableName(productTable)} p ON p.Id = di.ProductId
+                    WHERE d.DocumentTypeId = 2
+                      AND date(d.Date) >= @startDate
+                      AND date(d.Date) <= @endDate
+                      {filterSql}
+                    GROUP BY p.Id, p.Name
+                    ORDER BY
+                        CASE WHEN COALESCE(SUM({profitSql}), 0) < 0 THEN 0 ELSE 1 END,
+                        (COALESCE(SUM({grossTotalSql}), 0) - COALESCE(SUM({lineTotalSql}), 0)) DESC,
+                        COALESCE(SUM({lineTotalSql}), 0) DESC
+                    LIMIT @limit";
+
+                using var command = new SqliteCommand(sql, connection);
+                command.Parameters.AddWithValue("@startDate", startDate.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@endDate", endDate.ToString("yyyy-MM-dd"));
+                command.Parameters.AddWithValue("@limit", hasProductQuery ? 10 : 8);
+                if (hasProductQuery)
+                {
+                    command.Parameters.AddWithValue("@productQueryExact", productQuery!.Trim());
+                    command.Parameters.AddWithValue("@productQueryLike", $"%{productQuery.Trim()}%");
+                }
+
+                using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    string productId = reader.IsDBNull(0) ? "" : reader.GetValue(0).ToString() ?? "";
+                    string productName = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                    decimal revenue = SafeConvertToDecimal(reader, 4) ?? 0;
+                    decimal cost = SafeConvertToDecimal(reader, 5) ?? 0;
+                    decimal profit = SafeConvertToDecimal(reader, 6) ?? 0;
+                    var promotion = activePromotions.FirstOrDefault(p =>
+                        string.Equals(p.ProductId, productId, StringComparison.OrdinalIgnoreCase));
+
+                    cases.Add(new ProductProfitCase
+                    {
+                        ProductId = productId,
+                        ProductName = productName,
+                        Quantity = SafeConvertToDecimal(reader, 2) ?? 0,
+                        GrossTotal = SafeConvertToDecimal(reader, 3) ?? 0,
+                        RevenueAfterDiscount = revenue,
+                        Cost = cost,
+                        Profit = profit,
+                        MarginPercent = revenue > 0 ? profit / revenue * 100 : 0,
+                        PromotionName = promotion?.PromotionName,
+                        Explanation = BuildProductProfitCaseExplanation(productName, revenue, cost, profit, promotion)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_loggingService != null)
+                {
+                    await _loggingService.LogErrorAsync(
+                        $"Error reading product profit cases: {ex.Message}", "Database", ex.ToString());
+                }
+            }
+
+            return cases;
+        }
+
+        private static string BuildProductProfitCaseExplanation(
+            string productName,
+            decimal revenue,
+            decimal cost,
+            decimal profit,
+            ActivePromotionInfo? promotion)
+        {
+            if (profit < 0)
+            {
+                string promoText = promotion == null ? "" : $" Produk ini sedang ikut promo {promotion.PromotionName}.";
+                return $"{productName} minus karena total setelah diskon lebih kecil dari modal.{promoText}";
+            }
+
+            if (cost <= 0)
+            {
+                return $"{productName} memakai profit sesuai Aronium, tetapi modal produk masih 0 sehingga perlu cek data modal.";
+            }
+
+            if (promotion != null)
+            {
+                return $"{productName} ikut promo {promotion.PromotionName}; profit memakai total setelah diskon, bukan harga normal.";
+            }
+
+            return $"{productName}: profit = total setelah diskon {revenue:N0} - modal {cost:N0} = {profit:N0}.";
+        }
+
+        public static string BuildPlainLanguageProfitExplanation(ProfitExplanationContext context)
+        {
+            var sb = new StringBuilder();
+            string period = context.StartDate.Date == context.EndDate.Date
+                ? context.StartDate.ToString("dd/MM/yyyy")
+                : $"{context.StartDate:dd/MM/yyyy} - {context.EndDate:dd/MM/yyyy}";
+
+            sb.AppendLine($"Profit periode {period} mengikuti laporan Aronium: Rp {context.AroniumProfit:N0}.");
+            sb.AppendLine();
+            sb.AppendLine("Cara hitungnya:");
+            sb.AppendLine($"Total penjualan setelah diskon Rp {context.RevenueAfterDiscount:N0}");
+            sb.AppendLine($"- Modal barang Rp {context.CostOfGoodsSold:N0}");
+            sb.AppendLine($"= Profit Rp {context.AroniumProfit:N0}");
+
+            if (context.ItemDiscountAmount != 0 || context.DocumentDiscountAmount != 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Diskon yang tercatat:");
+                sb.AppendLine($"- Diskon item: Rp {context.ItemDiscountAmount:N0}");
+                sb.AppendLine($"- Diskon nota: Rp {context.DocumentDiscountAmount:N0}");
+            }
+
+            if (context.TaxAmount != 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Pajak/biaya transaksi: Rp {context.TaxAmount:N0}.");
+                sb.AppendLine($"Profit setelah pajak/biaya: Rp {context.ProfitAfterTax:N0}.");
+            }
+
+            var noCostCount = context.NotableCases.Count(item => item.Cost <= 0 && item.RevenueAfterDiscount > 0);
+            if (noCostCount > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Catatan: ada {noCostCount} produk dalam contoh yang modalnya masih 0, jadi perlu cek data modal.");
+            }
+
+            return sb.ToString().TrimEnd();
         }
 
         public async Task<List<SupplierPurchaseSummary>> GetSupplierPurchaseSummaryAsync(int limit = 10)
@@ -5724,8 +6285,8 @@ namespace SmartSembakoAssistant.Services
                             strftime('%Y', d.Date),
                             strftime('%m', d.Date),
                             COUNT(DISTINCT d.Id),
-                            COALESCE(SUM(di.Total), 0),
-                            COALESCE(SUM((di.Price - di.ProductCost) * di.Quantity), 0)
+                            COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0),
+                            COALESCE(SUM({BuildAroniumProfitSql("di")}), 0)
                         FROM {ValidateTableName(documentTable)} d
                         LEFT JOIN {ValidateTableName(documentItemTable)} di ON di.DocumentId = d.Id
                         WHERE d.DocumentTypeId = 2
@@ -5872,7 +6433,7 @@ namespace SmartSembakoAssistant.Services
                         date(d.Date),
                         COUNT(DISTINCT d.Id),
                         COALESCE(SUM(ABS(di.Quantity)), 0),
-                        COALESCE(SUM(di.Total), 0)
+                        COALESCE(SUM({BuildAroniumLineTotalSql("di")}), 0)
                     FROM {ValidateTableName(documentTable)} d
                     INNER JOIN {ValidateTableName(documentItemTable)} di ON di.DocumentId = d.Id
                     WHERE d.DocumentTypeId = 2
@@ -5986,45 +6547,41 @@ namespace SmartSembakoAssistant.Services
                 string startDateStr = startDate.ToString("yyyy-MM-dd");
                 string endDateStr = endDate.ToString("yyyy-MM-dd");
 
-                // Build query: join Document + DocumentItem, optionally join Product for name
-                string sql;
-                if (!string.IsNullOrEmpty(productTable))
-                {
-                    sql = $@"
-                        SELECT
-                            d.Date,
-                            d.Id as DocumentId,
-                            p.Name as ProductName,
-                            di.Quantity,
-                            di.Price,
-                            di.Total,
-                            (di.Price - di.ProductCost) * di.Quantity as Profit
-                        FROM {ValidateTableName(documentTable)} d
-                        INNER JOIN {ValidateTableName(documentItemTable)} di ON d.Id = di.DocumentId
-                        LEFT JOIN {ValidateTableName(productTable)} p ON di.ProductId = p.Id
-                        WHERE d.DocumentTypeId = 2
-                        AND date(d.Date) >= @startDate
-                        AND date(d.Date) <= @endDate
-                        ORDER BY d.Date DESC, d.Id";
-                }
-                else
-                {
-                    sql = $@"
-                        SELECT
-                            d.Date,
-                            d.Id as DocumentId,
-                            NULL as ProductName,
-                            di.Quantity,
-                            di.Price,
-                            di.Total,
-                            (di.Price - di.ProductCost) * di.Quantity as Profit
-                        FROM {ValidateTableName(documentTable)} d
-                        INNER JOIN {ValidateTableName(documentItemTable)} di ON d.Id = di.DocumentId
-                        WHERE d.DocumentTypeId = 2
-                        AND date(d.Date) >= @startDate
-                        AND date(d.Date) <= @endDate
-                        ORDER BY d.Date DESC, d.Id";
-                }
+                string productJoin = string.IsNullOrEmpty(productTable)
+                    ? string.Empty
+                    : $"LEFT JOIN {ValidateTableName(productTable)} p ON di.ProductId = p.Id";
+                string productSelect = string.IsNullOrEmpty(productTable)
+                    ? "NULL as ProductName"
+                    : "p.Name as ProductName";
+
+                string lineTotalSql = BuildAroniumLineTotalSql("di");
+                string costSql = BuildAroniumLineCostSql("di");
+                string grossTotalSql = BuildAroniumLineGrossTotalSql("di");
+                string totalBeforeDocDiscountSql = BuildAroniumLineTotalBeforeDocumentDiscountSql("di");
+                string taxSql = BuildLineTaxAmountSql("di");
+                string profitSql = BuildAroniumProfitSql("di");
+
+                string sql = $@"
+                    SELECT
+                        d.Date,
+                        COALESCE(d.Number, d.Id) as DocumentNumber,
+                        {productSelect},
+                        di.Quantity,
+                        COALESCE(di.PriceAfterDiscount, di.Price, 0) as Price,
+                        {lineTotalSql} as Total,
+                        {profitSql} as Profit,
+                        {costSql} as Cost,
+                        {grossTotalSql} as GrossTotal,
+                        ({grossTotalSql}) - ({totalBeforeDocDiscountSql}) as ItemDiscountAmount,
+                        ({totalBeforeDocDiscountSql}) - ({lineTotalSql}) as DocumentDiscountAmount,
+                        {taxSql} as TaxAmount
+                    FROM {ValidateTableName(documentTable)} d
+                    INNER JOIN {ValidateTableName(documentItemTable)} di ON d.Id = di.DocumentId
+                    {productJoin}
+                    WHERE d.DocumentTypeId = 2
+                    AND date(d.Date) >= @startDate
+                    AND date(d.Date) <= @endDate
+                    ORDER BY d.Date DESC, d.Id";
 
                 using var command = new SqliteCommand(sql, connection);
                 command.Parameters.AddWithValue("@startDate", startDateStr);
@@ -6034,6 +6591,10 @@ namespace SmartSembakoAssistant.Services
 
                 while (await reader.ReadAsync())
                 {
+                    decimal total = SafeConvertToDecimal(reader, 5) ?? 0;
+                    decimal profit = SafeConvertToDecimal(reader, 6) ?? 0;
+                    decimal taxAmount = SafeConvertToDecimal(reader, 11) ?? 0;
+
                     lineItems.Add(new SalesLineItem
                     {
                         Date = reader.IsDBNull(0) ? DateTime.Now : reader.GetDateTime(0),
@@ -6041,8 +6602,16 @@ namespace SmartSembakoAssistant.Services
                         ProductName = reader.IsDBNull(2) ? "Unknown" : reader.GetString(2),
                         Quantity = SafeConvertToDecimal(reader, 3) ?? 0,
                         Price = SafeConvertToDecimal(reader, 4) ?? 0,
-                        Total = SafeConvertToDecimal(reader, 5) ?? 0,
-                        Profit = SafeConvertToDecimal(reader, 6) ?? 0
+                        Total = total,
+                        Profit = profit,
+                        AroniumProfit = profit,
+                        Cost = SafeConvertToDecimal(reader, 7) ?? 0,
+                        GrossTotal = SafeConvertToDecimal(reader, 8) ?? 0,
+                        DiscountAmount = SafeConvertToDecimal(reader, 9) ?? 0,
+                        DocumentDiscountAmount = SafeConvertToDecimal(reader, 10) ?? 0,
+                        TaxAmount = taxAmount,
+                        ProfitAfterTax = profit - taxAmount,
+                        MarginPercent = total > 0 ? profit / total * 100 : 0
                     });
                 }
             }
@@ -6087,8 +6656,8 @@ namespace SmartSembakoAssistant.Services
                         p.Name,
                         {GetProductUnitSql("p")},
                         SUM(di.Quantity) as TotalQty,
-                        SUM(di.Total) as TotalRevenue,
-                        SUM((di.Price - di.ProductCost) * di.Quantity) as TotalProfit
+                        SUM({BuildAroniumLineTotalSql("di")}) as TotalRevenue,
+                        SUM({BuildAroniumProfitSql("di")}) as TotalProfit
                     FROM {ValidateTableName(documentItemTable)} di
                     INNER JOIN {ValidateTableName(documentTable)} d ON di.DocumentId = d.Id
                     INNER JOIN {ValidateTableName(productTable)} p ON di.ProductId = p.Id

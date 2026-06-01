@@ -247,6 +247,9 @@
                                 <DataGridTextColumn Header="Produk" Binding="{Binding ProductName}" Width="*"/>
                                 <DataGridTextColumn Header="Qty" Binding="{Binding Quantity}" Width="70"/>
                                 <DataGridTextColumn Header="Harga" Binding="{Binding Price, StringFormat='Rp {0:N0}'}" Width="110"/>
+                                <DataGridTextColumn Header="Cost" Binding="{Binding Cost, StringFormat='Rp {0:N0}'}" Width="110"/>
+                                <DataGridTextColumn Header="Diskon" Binding="{Binding DiscountAmount, StringFormat='Rp {0:N0}'}" Width="110"/>
+                                <DataGridTextColumn Header="Tax" Binding="{Binding TaxAmount, StringFormat='Rp {0:N0}'}" Width="90"/>
                                 <DataGridTextColumn Header="Total" Binding="{Binding Total, StringFormat='Rp {0:N0}'}" Width="120"/>
                                 <DataGridTextColumn Header="Profit" Binding="{Binding Profit, StringFormat='Rp {0:N0}'}" Width="120"/>
                             </DataGrid.Columns>

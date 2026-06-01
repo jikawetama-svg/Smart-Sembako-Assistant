@@ -294,6 +294,9 @@ namespace SmartSembakoAssistant.Views
                     ProductName = li.ProductName ?? "Unknown",
                     Quantity = (int)li.Quantity,
                     Price = li.Price,
+                    Cost = li.Cost,
+                    DiscountAmount = li.DiscountAmount + li.DocumentDiscountAmount,
+                    TaxAmount = li.TaxAmount,
                     Total = li.Total,
                     Profit = li.Profit
                 })

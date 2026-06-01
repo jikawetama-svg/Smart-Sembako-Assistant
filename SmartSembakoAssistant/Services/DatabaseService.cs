@@ -255,6 +255,19 @@ namespace SmartSembakoAssistant.Services
                         updated_at TEXT NOT NULL
                     )";
 
+                string createCustomerStatusNotesTable = @"
+                    CREATE TABLE IF NOT EXISTS customer_status_notes (
+                        customer_id TEXT PRIMARY KEY,
+                        customer_name_snapshot TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        reason_category TEXT NOT NULL,
+                        original_message TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        created_by TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )";
+
                 string createProductAliasesTable = @"
                     CREATE TABLE IF NOT EXISTS product_aliases (
                         alias_name TEXT PRIMARY KEY,
@@ -403,6 +416,11 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 using (var command = new SqliteCommand(createRuntimeStateTable, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+
+                using (var command = new SqliteCommand(createCustomerStatusNotesTable, connection))
                 {
                     command.ExecuteNonQuery();
                 }
@@ -2631,6 +2649,153 @@ namespace SmartSembakoAssistant.Services
             using var command = new SqliteCommand("SELECT value FROM runtime_state WHERE state_key = @state_key", connection);
             command.Parameters.AddWithValue("@state_key", key);
             return command.ExecuteScalar()?.ToString();
+        }
+
+        public async Task SaveCustomerStatusNoteAsync(CustomerStatusNote note)
+        {
+            if (string.IsNullOrWhiteSpace(note.CustomerId))
+            {
+                return;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            string now = ToDbTimestamp(DateTime.Now);
+            string sql = @"
+                INSERT INTO customer_status_notes (
+                    customer_id, customer_name_snapshot, status, reason_category, original_message,
+                    confidence, created_by, created_at, updated_at
+                )
+                VALUES (
+                    @customer_id, @customer_name_snapshot, @status, @reason_category, @original_message,
+                    @confidence, @created_by, @created_at, @updated_at
+                )
+                ON CONFLICT(customer_id) DO UPDATE SET
+                    customer_name_snapshot = excluded.customer_name_snapshot,
+                    status = excluded.status,
+                    reason_category = excluded.reason_category,
+                    original_message = excluded.original_message,
+                    confidence = excluded.confidence,
+                    created_by = excluded.created_by,
+                    updated_at = excluded.updated_at";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@customer_id", note.CustomerId);
+            command.Parameters.AddWithValue("@customer_name_snapshot", note.CustomerNameSnapshot ?? string.Empty);
+            command.Parameters.AddWithValue("@status", note.Status ?? "Active");
+            command.Parameters.AddWithValue("@reason_category", note.ReasonCategory ?? string.Empty);
+            command.Parameters.AddWithValue("@original_message", note.OriginalMessage ?? string.Empty);
+            command.Parameters.AddWithValue("@confidence", note.Confidence);
+            command.Parameters.AddWithValue("@created_by", note.CreatedBy ?? string.Empty);
+            command.Parameters.AddWithValue("@created_at", ToDbTimestamp(note.CreatedAt == default ? DateTime.Now : note.CreatedAt));
+            command.Parameters.AddWithValue("@updated_at", now);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        public async Task<CustomerStatusNote?> GetCustomerStatusNoteAsync(string customerId)
+        {
+            if (string.IsNullOrWhiteSpace(customerId))
+            {
+                return null;
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            const string sql = @"
+                SELECT customer_id, customer_name_snapshot, status, reason_category, original_message,
+                       confidence, created_by, created_at, updated_at
+                FROM customer_status_notes
+                WHERE customer_id = @customer_id";
+
+            using var command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("@customer_id", customerId);
+            using var reader = await command.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? ReadCustomerStatusNote(reader) : null;
+        }
+
+        public async Task<Dictionary<string, CustomerStatusNote>> GetCustomerStatusNotesAsync(IEnumerable<string> customerIds)
+        {
+            var ids = customerIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!ids.Any())
+            {
+                return new Dictionary<string, CustomerStatusNote>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var result = new Dictionary<string, CustomerStatusNote>(StringComparer.OrdinalIgnoreCase);
+            foreach (var chunk in ids.Chunk(200))
+            {
+                string parameters = string.Join(",", chunk.Select((_, index) => $"@id{index}"));
+                string sql = $@"
+                    SELECT customer_id, customer_name_snapshot, status, reason_category, original_message,
+                           confidence, created_by, created_at, updated_at
+                    FROM customer_status_notes
+                    WHERE customer_id IN ({parameters})";
+
+                using var command = new SqliteCommand(sql, connection);
+                int i = 0;
+                foreach (string id in chunk)
+                {
+                    command.Parameters.AddWithValue($"@id{i++}", id);
+                }
+
+                using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var note = ReadCustomerStatusNote(reader);
+                    result[note.CustomerId] = note;
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<HashSet<string>> GetInactiveCustomerIdsAsync()
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            const string sql = @"
+                SELECT customer_id
+                FROM customer_status_notes
+                WHERE status = 'Inactive'";
+
+            using var command = new SqliteCommand(sql, connection);
+            using var reader = await command.ExecuteReaderAsync();
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (await reader.ReadAsync())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    ids.Add(reader.GetString(0));
+                }
+            }
+
+            return ids;
+        }
+
+        private static CustomerStatusNote ReadCustomerStatusNote(SqliteDataReader reader)
+        {
+            return new CustomerStatusNote
+            {
+                CustomerId = reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
+                CustomerNameSnapshot = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                Status = reader.IsDBNull(2) ? "Active" : reader.GetString(2),
+                ReasonCategory = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                OriginalMessage = reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                Confidence = reader.IsDBNull(5) ? 0 : Convert.ToDecimal(reader.GetValue(5)),
+                CreatedBy = reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
+                CreatedAt = reader.IsDBNull(7) || !DateTime.TryParse(reader.GetString(7), out var createdAt) ? DateTime.Now : createdAt,
+                UpdatedAt = reader.IsDBNull(8) || !DateTime.TryParse(reader.GetString(8), out var updatedAt) ? DateTime.Now : updatedAt
+            };
         }
 
         public int GetPendingOutboundCount()

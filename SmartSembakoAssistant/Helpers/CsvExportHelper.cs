@@ -14,11 +14,14 @@ namespace SmartSembakoAssistant.Helpers
                 customer.Phone ?? string.Empty,
                 customer.Email ?? string.Empty,
                 customer.PurchaseCount.ToString(),
-                customer.TotalSpent.ToString("0.##")
+                customer.TotalSpent.ToString("0.##"),
+                ToCustomerStatusLabel(customer.StatusNote),
+                ToInactiveReasonLabel(customer.StatusNote),
+                customer.StatusNote?.OriginalMessage ?? string.Empty
             });
 
             return BuildCsv(
-                new[] { "No", "Nama", "HP", "Email", "Total Transaksi", "Total Belanja" },
+                new[] { "No", "Nama", "HP", "Email", "Total Transaksi", "Total Belanja", "Status", "Alasan Nonaktif", "Catatan Terakhir" },
                 rows);
         }
 
@@ -47,13 +50,20 @@ namespace SmartSembakoAssistant.Helpers
                 item.ProductName ?? string.Empty,
                 item.Quantity.ToString("0.##"),
                 item.Price.ToString("0.##"),
+                item.Cost.ToString("0.##"),
+                item.GrossTotal.ToString("0.##"),
+                item.DiscountAmount.ToString("0.##"),
+                item.DocumentDiscountAmount.ToString("0.##"),
+                item.TaxAmount.ToString("0.##"),
                 item.Total.ToString("0.##"),
                 item.Profit.ToString("0.##"),
+                item.MarginPercent.ToString("0.##"),
+                item.ProfitAfterTax.ToString("0.##"),
                 periodLabel
             });
 
             return BuildCsv(
-                new[] { "No", "Tanggal", "Dokumen", "Produk", "Qty", "Harga", "Total", "Profit", "Periode" },
+                new[] { "No", "Tanggal", "Dokumen", "Produk", "Qty", "Harga", "Cost", "Gross Total", "Diskon Item", "Diskon Nota", "Tax", "Total Setelah Diskon", "Profit Aronium", "Margin %", "Profit After Tax", "Periode" },
                 rows);
         }
 
@@ -74,6 +84,45 @@ namespace SmartSembakoAssistant.Helpers
 
             return BuildCsv(
                 new[] { "No", "Kode", "Nama", "Stok", "Satuan", "Harga Beli", "Harga Jual", "Nilai Stok", "Kategori" },
+                rows);
+        }
+
+        public static string GenerateProductAuditSummaryCsv(IEnumerable<Product> products)
+        {
+            var list = products.ToList();
+            var rows = new[]
+            {
+                new[] { "produk_total", list.Count.ToString() },
+                new[] { "produk_cost_0", list.Count(product => (product.PurchasePrice ?? 0) == 0).ToString() },
+                new[] { "produk_cost_minus", list.Count(product => (product.PurchasePrice ?? 0) < 0).ToString() },
+                new[] { "produk_stok_minus", list.Count(product => (product.Stock ?? 0) < 0).ToString() },
+                new[] { "produk_stok_0", list.Count(product => (product.Stock ?? 0) == 0).ToString() },
+                new[] { "produk_harga_jual_0", list.Count(product => (product.SellingPrice ?? 0) == 0).ToString() },
+                new[] { "produk_harga_jual_minus", list.Count(product => (product.SellingPrice ?? 0) < 0).ToString() },
+                new[] { "produk_kategori_kosong", list.Count(product => string.IsNullOrWhiteSpace(product.Category)).ToString() }
+            };
+
+            return BuildCsv(new[] { "Kategori Audit", "Jumlah" }, rows);
+        }
+
+        public static string GenerateCriticalStockCsv(IEnumerable<Product> products)
+        {
+            var rows = products.Select((product, index) => new[]
+            {
+                (index + 1).ToString(),
+                product.Sku ?? string.Empty,
+                product.Name ?? string.Empty,
+                (product.Stock ?? 0).ToString("0.##"),
+                product.Unit ?? "Pcs",
+                (product.PurchasePrice ?? 0).ToString("0.##"),
+                (product.SellingPrice ?? 0).ToString("0.##"),
+                ((product.Stock ?? 0) * (product.PurchasePrice ?? 0)).ToString("0.##"),
+                product.Category ?? string.Empty,
+                GetAuditStockStatus(product.Stock)
+            });
+
+            return BuildCsv(
+                new[] { "No", "Kode", "Nama", "Stok", "Satuan", "Harga Beli", "Harga Jual", "Nilai Stok", "Kategori", "Status Audit" },
                 rows);
         }
 
@@ -225,6 +274,37 @@ namespace SmartSembakoAssistant.Helpers
         {
             string sanitized = value.Replace("\"", "\"\"");
             return $"\"{sanitized}\"";
+        }
+
+        private static string ToCustomerStatusLabel(CustomerStatusNote? note)
+        {
+            return string.Equals(note?.Status, "Inactive", StringComparison.OrdinalIgnoreCase) ? "Nonaktif" : "Aktif";
+        }
+
+        private static string ToInactiveReasonLabel(CustomerStatusNote? note)
+        {
+            if (!string.Equals(note?.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            return note?.ReasonCategory switch
+            {
+                "stopped_selling" => "Berhenti jualan",
+                "bankrupt" => "Bangkrut",
+                "moved" => "Pindah",
+                "closed_business" => "Tutup usaha",
+                "deceased" => "Meninggal",
+                _ => "Lainnya"
+            };
+        }
+
+        private static string GetAuditStockStatus(decimal? stock)
+        {
+            decimal value = stock ?? 0;
+            if (value < 0) return "MINUS";
+            if (value == 0) return "HABIS";
+            return "RENDAH";
         }
     }
 }

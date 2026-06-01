@@ -21,6 +21,9 @@ namespace SmartSembakoAssistant.Views
         public string? ProductName { get; set; }
         public int Quantity { get; set; }
         public decimal Price { get; set; }
+        public decimal Cost { get; set; }
+        public decimal DiscountAmount { get; set; }
+        public decimal TaxAmount { get; set; }
         public decimal Total { get; set; }
         public decimal Profit { get; set; }
     }
@@ -106,6 +109,9 @@ namespace SmartSembakoAssistant.Views
                     ProductName = li.ProductName ?? "Unknown",
                     Quantity = (int)li.Quantity,
                     Price = li.Price,
+                    Cost = li.Cost,
+                    DiscountAmount = li.DiscountAmount + li.DocumentDiscountAmount,
+                    TaxAmount = li.TaxAmount,
                     Total = li.Total,
                     Profit = li.Profit
                 }).ToList();

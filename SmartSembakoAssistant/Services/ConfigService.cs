@@ -178,7 +178,10 @@ namespace SmartSembakoAssistant.Services
                         TransaksiSheetName = _config.GoogleSheets.TransaksiSheetName,
                         AnalitikSheetName = _config.GoogleSheets.AnalitikSheetName,
                         LogSheetName = _config.GoogleSheets.LogSheetName,
-                        PurchaseSheetName = _config.GoogleSheets.PurchaseSheetName
+                        PurchaseSheetName = _config.GoogleSheets.PurchaseSheetName,
+                        EnableFormatting = _config.GoogleSheets.EnableFormatting,
+                        EnableCharts = _config.GoogleSheets.EnableCharts,
+                        EnableConditionalFormatting = _config.GoogleSheets.EnableConditionalFormatting
                     } : null,
                     OcrReceipt = _config?.OcrReceipt != null ? new OcrReceiptSettings
                     {

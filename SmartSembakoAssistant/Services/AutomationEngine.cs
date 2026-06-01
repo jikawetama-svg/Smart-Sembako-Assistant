@@ -1977,6 +1977,11 @@ namespace SmartSembakoAssistant.Services
                 }
             }
 
+            if (!isCommand && IsConfirmationReply(message.Text))
+            {
+                return await ResolveConfirmationReplyAsync(message, context);
+            }
+
             string? staticReply = matchedRules
                 .SelectMany(r => r.Actions ?? Enumerable.Empty<AutomationRuleAction>())
                 .FirstOrDefault(a => string.Equals(a.Type, "reply", StringComparison.OrdinalIgnoreCase))
@@ -2142,18 +2147,71 @@ namespace SmartSembakoAssistant.Services
             return context.IsOwner || context.IsKasir;
         }
 
+        private async Task<string> ResolveConfirmationReplyAsync(InboundMessage message, AutomationExecutionContext context)
+        {
+            if (context != null)
+            {
+                string? shadowConfirm = await TryConfirmPendingShadowMappingAsync(context);
+                if (!string.IsNullOrWhiteSpace(shadowConfirm))
+                {
+                    return shadowConfirm;
+                }
+            }
+
+            string key = GetConfirmationKey(message.Channel, message.SenderId);
+            var pending = await _databaseService.GetPendingConfirmationAsync(key);
+            if (pending != null)
+            {
+                string actionLabel = pending.Command switch
+                {
+                    "ocr_bulk_restock" => "OCR pembelian",
+                    "bulk_inventory" => "bulk inventory",
+                    "inventory" => "inventory",
+                    "bulk_restock" => "bulk restock",
+                    "restock" => "restock",
+                    "price_override_confirmation" => "review harga OCR",
+                    _ => "aksi pending"
+                };
+                string result = await ConfirmPendingActionAsync(message, context);
+                return $"Mengonfirmasi {actionLabel}.\n\n{result}";
+            }
+
+            if (HasPendingExport(context))
+            {
+                return await HandlePendingExportConfirmationAsync(context);
+            }
+
+            return "Tidak ada aksi yang menunggu konfirmasi.";
+        }
+
+        private static bool IsConfirmationReply(string text)
+        {
+            string normalized = NormalizeText(text ?? string.Empty);
+            return normalized is "ya" or "iya" or "yes" or "y" or "ok" or "oke" or "lanjut" or "konfirmasi" or "confirm";
+        }
+
+        private static bool IsOperationalCommand(string cmd)
+        {
+            return cmd is "/restock" or "/inventory" or "/quick_inventory" or "/inventory_family" or "/struk" or "/inputstruk" or "/set_family";
+        }
+
         private async Task<string> HandleCommandAsync(InboundMessage message, AutomationExecutionContext context)
         {
             string[] parts = message.Text.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
             string cmd = parts[0].ToLowerInvariant();
             string args = parts.Length > 1 ? parts[1] : string.Empty;
 
+            if (IsOperationalCommand(cmd))
+            {
+                ClearPendingExport(context);
+            }
+
             return cmd switch
             {
                 "/start" => BuildStartText(),
                 "/menu" => BuildMenuHeaderText("main"),
                 "/help" => BuildHelpCommandText(args, context.IsOwner),
-                "/confirm" => await ConfirmPendingActionAsync(message, context),
+                "/confirm" => await ResolveConfirmationReplyAsync(message, context),
                 "/simpan" or "/confirm_modal" => context.IsOwner ? await ConfirmPriceOverrideAsync(message, args, updateCost: true, updateSellingPrice: false) : BuildOwnerOnlyDeniedMessage(),
                 "/simpan_jual" or "/confirm_modal_jual" => context.IsOwner ? await ConfirmPriceOverrideAsync(message, args, updateCost: true, updateSellingPrice: true) : BuildOwnerOnlyDeniedMessage(),
                 "/lewati_harga" or "/skip_modal" => context.IsOwner ? await ConfirmPriceOverrideAsync(message, args, updateCost: false, updateSellingPrice: false) : BuildOwnerOnlyDeniedMessage(),
@@ -2174,6 +2232,7 @@ namespace SmartSembakoAssistant.Services
                 "/statistik" => context.IsOwner ? await HandleStatisticsAsync() : BuildOwnerOnlyDeniedMessage(),
                 "/produk" => context.IsOwner ? await HandleProductsCommandAsync(args, context) : BuildOwnerOnlyDeniedMessage(),
                 "/pelanggan_loyal" => CanUseOperationalFeatures(context) ? await HandleLoyalCustomersAsync(context) : BuildOwnerOnlyDeniedMessage(),
+                "/inactive" or "/nonaktif" or "/nonaktifkan" => CanUseOperationalFeatures(context) ? await HandleInactiveCustomerCommandAsync(args, message, context) : BuildOwnerOnlyDeniedMessage(),
                 "/pelanggan" => CanUseOperationalFeatures(context) ? await HandleCustomersAsync(args, context) : BuildOwnerOnlyDeniedMessage(),
                 "/supplier" => context.IsOwner ? await HandleSuppliersAsync(args, context) : BuildOwnerOnlyDeniedMessage(),
                 "/user" => context.IsOwner ? await HandleUsersAsync(args) : BuildOwnerOnlyDeniedMessage(),
@@ -2243,7 +2302,7 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 sb.AppendLine();
-                sb.AppendLine($"{IconWarning} Banyak stok minus besar - lakukan /inventory untuk koreksi.");
+                sb.AppendLine($"{IconWarning} Stok minus: perlu audit/opname jika bukan kondisi yang disengaja.");
                 sb.Append("Atau: /stok [nama] untuk cek produk spesifik.");
 
                 return sb.ToString().TrimEnd();
@@ -2361,9 +2420,10 @@ namespace SmartSembakoAssistant.Services
             var reportDate = startDate.Date;
             bool singleDay = startDate.Date == endDate.Date;
 
-            var revenue = await _posDbService.GetSalesRevenueAsync(startDate, endDate);
-            var profit = await _posDbService.GetSalesProfitAsync(startDate, endDate);
-            int transactionCount = await _posDbService.GetSalesTransactionCountAsync(startDate, endDate);
+            var profitBreakdown = await _posDbService.GetSalesProfitBreakdownAsync(startDate, endDate);
+            var revenue = profitBreakdown.Revenue;
+            var profit = profitBreakdown.AroniumProfit;
+            int transactionCount = profitBreakdown.TransactionCount;
             var recentSales = (await _posDbService.GetSalesTransactionsAsync(startDate, endDate))
                 .OrderByDescending(item => item.Date)
                 .Take(3)
@@ -2387,6 +2447,14 @@ namespace SmartSembakoAssistant.Services
             if (isOwner)
             {
                 sb.AppendLine($"  {IconProfit} Profit   : {FormatCurrency(profit)} ({marginPercent:0.#}%)");
+                if (profitBreakdown.ItemDiscountAmount != 0 || profitBreakdown.DocumentDiscountAmount != 0)
+                {
+                    sb.AppendLine($"  Diskon   : item {FormatCurrency(profitBreakdown.ItemDiscountAmount)} | nota {FormatCurrency(profitBreakdown.DocumentDiscountAmount)}");
+                }
+                if (profitBreakdown.TaxAmount != 0)
+                {
+                    sb.AppendLine($"  Pajak    : {FormatCurrency(profitBreakdown.TaxAmount)} | after tax {FormatCurrency(profitBreakdown.ProfitAfterTax)}");
+                }
             }
             sb.AppendLine(transactionCount == 0
                 ? $"  {IconReceipt} Transaksi: 0"
@@ -2849,7 +2917,7 @@ namespace SmartSembakoAssistant.Services
                     return "Tidak ada pelanggan aktif.";
                 }
 
-                var customers = (await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true))
+                var customers = (await AttachCustomerStatusNotesAsync(await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true)))
                     .OrderByDescending(customer => customer.PurchaseCount)
                     .ThenByDescending(customer => customer.TotalSpent)
                     .ThenBy(customer => customer.Name)
@@ -2896,7 +2964,7 @@ namespace SmartSembakoAssistant.Services
             }
 
             _customerPaginationBySender.TryRemove(senderKey, out _);
-            var matches = await _posDbService.GetCustomersAsync(query, 5, onlyCustomers: true);
+            var matches = await AttachCustomerStatusNotesAsync(await _posDbService.GetCustomersAsync(query, 5, onlyCustomers: true));
             if (!matches.Any())
             {
                 return $"Pelanggan dengan kata kunci \"{query}\" tidak ditemukan.";
@@ -2922,6 +2990,142 @@ namespace SmartSembakoAssistant.Services
             return sb.ToString().TrimEnd();
         }
 
+        private async Task<string> HandleInactiveCustomerCommandAsync(string args, InboundMessage message, AutomationExecutionContext context)
+        {
+            if (string.IsNullOrWhiteSpace(args))
+            {
+                return "Format: /inactive <nama pelanggan>. Contoh: /inactive Hj Eni";
+            }
+
+            string text = $"{args} berhenti jualan";
+            return await RecordInactiveCustomerAsync(args, "stopped_selling", text, 1m, message, context);
+        }
+
+        private async Task<string?> TryHandleCustomerInactiveIntentAsync(string userMessage, AutomationExecutionContext context)
+        {
+            string normalized = NormalizeText(userMessage);
+            var reason = DetectInactiveCustomerReason(normalized);
+            if (reason == null)
+            {
+                if (ContainsAny(normalized, "pengen tidur", "mau makan", "lagi main", "ngantuk"))
+                {
+                    return "Saya tidak mencatat itu sebagai status pelanggan karena alasannya bukan status bisnis. Contoh yang bisa dicatat: \"Hj Eni berhenti jualan\" atau \"Hj Eni pindah rumah\".";
+                }
+
+                return null;
+            }
+
+            string? customerName = ExtractInactiveCustomerName(userMessage, reason.Value.MatchedPhrase);
+            if (!LooksLikeCustomerNameCandidate(customerName))
+            {
+                return "Nama pelanggan belum jelas. Contoh: \"Hj Eni berhenti jualan\" atau \"Teh Nuraeni pindah rumah\".";
+            }
+
+            return await RecordInactiveCustomerAsync(customerName!, reason.Value.Category, userMessage, reason.Value.Confidence, null, context);
+        }
+
+        private async Task<string> RecordInactiveCustomerAsync(
+            string customerName,
+            string reasonCategory,
+            string originalMessage,
+            decimal confidence,
+            InboundMessage? message,
+            AutomationExecutionContext context)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var matches = await _posDbService.GetCustomersAsync(customerName, 5, onlyCustomers: true);
+            if (!matches.Any())
+            {
+                return $"Pelanggan dengan kata kunci \"{customerName}\" tidak ditemukan.";
+            }
+
+            var exact = matches.FirstOrDefault(customer =>
+                string.Equals(NormalizeText(customer.Name ?? string.Empty), NormalizeText(customerName), StringComparison.Ordinal));
+            if (exact == null && matches.Count > 1)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"Ada beberapa kandidat untuk \"{customerName}\". Perjelas nama pelanggan:");
+                foreach (var customer in matches)
+                {
+                    sb.AppendLine(BuildCustomerListLine(customer, null));
+                }
+
+                return sb.ToString().TrimEnd();
+            }
+
+            var customerInfo = exact ?? matches[0];
+            if (string.IsNullOrWhiteSpace(customerInfo.Id))
+            {
+                return $"Pelanggan dengan kata kunci \"{customerName}\" tidak ditemukan.";
+            }
+
+            var note = new CustomerStatusNote
+            {
+                CustomerId = customerInfo.Id,
+                CustomerNameSnapshot = customerInfo.Name ?? customerName,
+                Status = confidence >= 0.75m ? "Inactive" : "MaybeInactive",
+                ReasonCategory = reasonCategory,
+                OriginalMessage = originalMessage,
+                Confidence = confidence,
+                CreatedBy = message?.SenderId ?? context.Identity.SenderId,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            };
+
+            await _databaseService.SaveCustomerStatusNoteAsync(note);
+            string statusLabel = note.Status == "Inactive" ? "pelanggan nonaktif" : "kemungkinan nonaktif";
+            return $"Saya catat {FormatOptional(customerInfo.Name)} sebagai {statusLabel}: {FormatInactiveReason(reasonCategory)}. Mulai sekarang tidak dihitung di pelanggan loyal atau at-risk.";
+        }
+
+        private static (string Category, string MatchedPhrase, decimal Confidence)? DetectInactiveCustomerReason(string normalized)
+        {
+            var patterns = new (string Category, decimal Confidence, string[] Phrases)[]
+            {
+                ("stopped_selling", 0.95m, new[] { "berhenti dagang", "berhenti jualan", "ga jualan", "gak jualan", "nggak jualan", "tidak jualan", "ga dagang", "gak dagang" }),
+                ("bankrupt", 0.95m, new[] { "bangkrut", "pailit" }),
+                ("moved", 0.9m, new[] { "pindah rumah", "pindah tempat", "sudah pindah", "udah pindah" }),
+                ("closed_business", 0.95m, new[] { "tutup usaha", "tokonya tutup", "udah tutup", "sudah tutup" }),
+                ("deceased", 0.95m, new[] { "meninggal", "wafat" })
+            };
+
+            foreach (var pattern in patterns)
+            {
+                string? phrase = pattern.Phrases.FirstOrDefault(item => normalized.Contains(item, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrWhiteSpace(phrase))
+                {
+                    return (pattern.Category, phrase, pattern.Confidence);
+                }
+            }
+
+            return null;
+        }
+
+        private static string? ExtractInactiveCustomerName(string text, string reasonPhrase)
+        {
+            string cleaned = NormalizeText(text);
+            cleaned = Regex.Replace(cleaned, $@"\b{Regex.Escape(reasonPhrase)}\b", " ", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"\b(pelanggan|customer|udah|sudah|telah|mah|si)\b", " ", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+            return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
+        }
+
+        private static string FormatInactiveReason(string reasonCategory)
+        {
+            return reasonCategory switch
+            {
+                "stopped_selling" => "berhenti jualan",
+                "bankrupt" => "bangkrut",
+                "moved" => "pindah rumah",
+                "closed_business" => "tutup usaha",
+                "deceased" => "meninggal",
+                _ => "lainnya"
+            };
+        }
+
         private async Task<List<CustomerInfo>> GetPersonalCustomersAsync()
         {
             if (_posDbService == null)
@@ -2929,9 +3133,28 @@ namespace SmartSembakoAssistant.Services
                 return new List<CustomerInfo>();
             }
 
-            return (await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true))
+            var customers = await AttachCustomerStatusNotesAsync(await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true));
+            return customers
+                .Where(customer => !string.Equals(customer.StatusNote?.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
                 .Where(customer => !IsGenericCustomerName(customer.Name))
                 .ToList();
+        }
+
+        private async Task<List<CustomerInfo>> AttachCustomerStatusNotesAsync(IEnumerable<CustomerInfo> customers)
+        {
+            var list = customers.ToList();
+            var notes = await _databaseService.GetCustomerStatusNotesAsync(
+                list.Select(customer => customer.Id ?? string.Empty));
+            foreach (var customer in list)
+            {
+                if (!string.IsNullOrWhiteSpace(customer.Id) &&
+                    notes.TryGetValue(customer.Id, out var note))
+                {
+                    customer.StatusNote = note;
+                }
+            }
+
+            return list;
         }
 
         private async Task<List<CustomerInfo>> GetLoyalCustomerSourceAsync()
@@ -4556,11 +4779,24 @@ namespace SmartSembakoAssistant.Services
             if (_configService.Config?.GoogleSheets?.Enabled == true)
             {
                 var sheetsService = new GoogleSheetsService(_configService, _loggingService);
+                var sheetMetadata = payload.Items.Select((item, index) => new PurchaseSheetRowMetadata
+                {
+                    ProductId = int.TryParse(item.ProductId, out int productId) ? productId : 0,
+                    ProductName = item.ProductName,
+                    RawOcrName = item.RawProductNames.Any()
+                        ? string.Join(" | ", item.RawProductNames.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase))
+                        : item.ProductName,
+                    MappingSource = item.MappingSource ?? "confirmed-ocr",
+                    TrustLevel = item.MappingTrustLevel ?? "confirmed",
+                    LineIndex = index + 1,
+                    CorrelationId = pending.CorrelationId
+                }).ToList();
                 var exportResult = await sheetsService.AppendPurchaseRowsAsync(
                     result.Items,
                     result.DocumentNumber,
                     supplierName,
-                    payload.ReceiptDate);
+                    payload.ReceiptDate,
+                    sheetMetadata);
 
                 sb.AppendLine();
                 sb.AppendLine(exportResult.Success
@@ -6818,18 +7054,115 @@ namespace SmartSembakoAssistant.Services
                 return "Database pos.db belum dikonfigurasi.";
             }
 
-            var summary = await _posDbService.GetProfitCalculationExplanationAsync(DateTime.Today, DateTime.Today);
+            var context = await _posDbService.GetProfitExplanationContextAsync(DateTime.Today, DateTime.Today);
             var sb = new StringBuilder();
             sb.AppendLine($"{IconProfit} CARA HITUNG PROFIT TOKO");
             sb.AppendLine();
-            sb.AppendLine($"Periode: {FormatDateRangeLabel(summary.StartDate, summary.EndDate)}");
-            sb.AppendLine($"Omzet: {FormatCurrency(summary.Revenue)}");
-            sb.AppendLine($"HPP/modal barang: {FormatCurrency(summary.CostOfGoodsSold)}");
-            sb.AppendLine($"Profit kotor: {FormatCurrency(summary.GrossProfit)}");
-            sb.AppendLine($"Margin: {summary.MarginPercent:0.##}%");
-            sb.AppendLine();
-            sb.Append("Rumus: profit kotor = SUM((harga jual - modal produk) x qty terjual). Produk tanpa modal membuat profit terlihat lebih besar dari kondisi sebenarnya.");
+            sb.Append(PosDbService.BuildPlainLanguageProfitExplanation(context));
             return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleActivePromotionsAsync(string? productQuery = null)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var promotions = string.IsNullOrWhiteSpace(productQuery)
+                ? await _posDbService.GetActivePromotionsAsync(DateTime.Today)
+                : await _posDbService.GetProductPromotionStatusAsync(productQuery, DateTime.Today);
+            if (!promotions.Any())
+            {
+                return string.IsNullOrWhiteSpace(productQuery)
+                    ? "Tidak ada promo aktif yang terbaca dari Aronium."
+                    : $"Tidak ada promo aktif untuk \"{productQuery}\" di Aronium.";
+            }
+
+            var sb = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(productQuery))
+            {
+                var promo = promotions[0];
+                sb.AppendLine($"{promo.ProductName} sedang ikut promo {promo.PromotionName}.");
+                sb.AppendLine($"Aturannya: {promo.HumanReadableRule}.");
+                sb.Append($"Periode: {FormatShortDate(promo.StartDate)} sampai {FormatShortDate(promo.EndDate)}.");
+                return sb.ToString();
+            }
+
+            sb.AppendLine("Promo aktif di Aronium:");
+            foreach (var group in promotions.GroupBy(item => item.PromotionName).OrderBy(group => group.Key))
+            {
+                sb.AppendLine($"- {group.Key}: {group.First().HumanReadableRule}");
+                foreach (var item in group.Take(8))
+                {
+                    sb.AppendLine($"  - {item.ProductName}");
+                }
+
+                if (group.Count() > 8)
+                {
+                    sb.AppendLine($"  - +{group.Count() - 8} produk lain");
+                }
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private async Task<string> HandleActiveTaxesAsync(string periodArgument = "today")
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var (startDate, endDate, _, _, _) = ResolveSalesPeriod(periodArgument);
+            var taxes = await _posDbService.GetActiveTaxesAsync();
+            var breakdown = await _posDbService.GetSalesProfitBreakdownAsync(startDate, endDate);
+            var sb = new StringBuilder();
+            if (!taxes.Any())
+            {
+                sb.AppendLine("Tidak ada pajak/biaya aktif yang terbaca dari Aronium.");
+            }
+            else
+            {
+                sb.AppendLine("Pajak/biaya aktif di Aronium:");
+                foreach (var tax in taxes)
+                {
+                    sb.AppendLine($"- {tax.Name}: {tax.HumanReadableRule}");
+                }
+            }
+
+            sb.AppendLine();
+            sb.AppendLine($"Yang benar-benar masuk transaksi periode ini: {FormatCurrency(breakdown.TaxAmount)}");
+            sb.AppendLine($"Profit sesuai Aronium: {FormatCurrency(breakdown.AroniumProfit)}");
+            sb.Append($"Profit setelah pajak/biaya: {FormatCurrency(breakdown.ProfitAfterTax)}");
+            return sb.ToString();
+        }
+
+        private async Task<string> HandleProductProfitExplanationAsync(string productQuery)
+        {
+            if (_posDbService == null)
+            {
+                return "Database pos.db belum dikonfigurasi.";
+            }
+
+            var context = await _posDbService.GetProfitExplanationContextAsync(DateTime.Today, DateTime.Today, productQuery);
+            var item = context.NotableCases.FirstOrDefault();
+            if (item == null)
+            {
+                return $"Produk \"{productQuery}\" tidak ditemukan di transaksi hari ini.";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"{item.ProductName}:");
+            sb.AppendLine($"Total setelah diskon: {FormatCurrency(item.RevenueAfterDiscount)}");
+            sb.AppendLine($"Modal: {FormatCurrency(item.Cost)}");
+            sb.AppendLine($"Profit: {FormatCurrency(item.Profit)}");
+            if (!string.IsNullOrWhiteSpace(item.PromotionName))
+            {
+                sb.AppendLine($"Promo terkait: {item.PromotionName}");
+            }
+            sb.Append(item.Explanation);
+            return sb.ToString();
         }
 
         private async Task<string> HandleCategorySearchAsync(string categoryKeyword, AutomationExecutionContext context)
@@ -8605,6 +8938,12 @@ namespace SmartSembakoAssistant.Services
                 return await HandleCustomerTransactionsAsync(customerTopic.EntityName!, context);
             }
 
+            string? inactiveResponse = await TryHandleCustomerInactiveIntentAsync(userMessage, context);
+            if (!string.IsNullOrWhiteSpace(inactiveResponse))
+            {
+                return inactiveResponse;
+            }
+
             if (ContainsAny(normalized, "tampilkan lengkap", "lihat lengkap", "detail lengkap", "semua item", "semua produk dokumen", "dokumen ini", "struk ini") &&
                 _lastDocumentBySender.TryGetValue(BuildSenderStateKey(context), out var lastDocumentNumber) &&
                 !string.IsNullOrWhiteSpace(lastDocumentNumber))
@@ -8644,6 +8983,10 @@ namespace SmartSembakoAssistant.Services
                 "shadow_stock" => await HandleShadowStockAsync(),
                 "effective_stock" => await HandleEffectiveStockAsync(intent.Argument ?? string.Empty),
                 "profit_explain" => await HandleProfitExplanationAsync(),
+                "active_promotions" => await HandleActivePromotionsAsync(),
+                "product_promotion" => await HandleActivePromotionsAsync(intent.Argument),
+                "active_taxes" => await HandleActiveTaxesAsync(intent.Argument ?? "today"),
+                "negative_profit_reason" => await HandleProductProfitExplanationAsync(intent.Argument ?? string.Empty),
                 "document_lookup" => await HandleDocumentLookupAsync(intent.Argument ?? string.Empty, context),
                 "customer_documents" => await HandleCustomerDocumentsAsync(intent.Argument ?? string.Empty),
                 "document_type_guide" => BuildDocumentTypeGuideResponse(),
@@ -8652,6 +8995,7 @@ namespace SmartSembakoAssistant.Services
                 "transaction_count" => await HandleSalesTransactionCountAsync(intent.Argument ?? "today"),
                 "bot_capabilities" => BuildBotIdentityResponse(),
                 "sales_summary" => await HandleSalesSummaryAsync(intent.Argument ?? "today", context),
+                "monthly_trend" => await HandleMonthlyTrendAsync(intent.Argument ?? string.Empty),
                 "statistics" => await HandleStatisticsAsync(),
                 "export_customers" => await HandleExportCustomersAsync(context),
                 "export_suppliers" => await HandleExportSuppliersAsync(context),
@@ -8894,7 +9238,35 @@ namespace SmartSembakoAssistant.Services
                 return new DeterministicIntent { Kind = "effective_stock", Argument = keyword, OwnerOnly = true };
             }
 
-            if (ContainsAny(normalized, "cara hitung profit", "hitung profit", "profit toko", "margin toko", "laba toko"))
+            if (ContainsAny(normalized, "pajak aktif", "biaya admin", "qris", "profit setelah pajak", "pajak hari ini"))
+            {
+                return new DeterministicIntent { Kind = "active_taxes", Argument = TryExtractSalesPeriodArgument(userMessage) ?? "today", OwnerOnly = true };
+            }
+
+            if (ContainsAny(normalized, "promo aktif", "diskon aktif", "produk apa saja yang diskon", "produk apa saja yang beli", "produk apa aja yang diskon"))
+            {
+                return new DeterministicIntent { Kind = "active_promotions", OwnerOnly = true };
+            }
+
+            if (ContainsAny(normalized, "promo", "diskon", "gratis"))
+            {
+                string? productQuery = ExtractPromotionProductKeyword(userMessage);
+                if (!string.IsNullOrWhiteSpace(productQuery))
+                {
+                    return new DeterministicIntent { Kind = "product_promotion", Argument = productQuery, OwnerOnly = true };
+                }
+            }
+
+            if (ContainsAny(normalized, "minus", "rugi") && ContainsAny(normalized, "profit", "laba", "untung"))
+            {
+                string? productQuery = ExtractProfitProductKeyword(userMessage);
+                if (!string.IsNullOrWhiteSpace(productQuery))
+                {
+                    return new DeterministicIntent { Kind = "negative_profit_reason", Argument = productQuery, OwnerOnly = true };
+                }
+            }
+
+            if (ContainsAny(normalized, "cara hitung profit", "hitung profit", "profit toko", "margin toko", "laba toko", "profit sudah termasuk diskon", "kenapa profit beda sama omzet"))
             {
                 return new DeterministicIntent { Kind = "profit_explain", OwnerOnly = true };
             }
@@ -8972,6 +9344,17 @@ namespace SmartSembakoAssistant.Services
                     Argument = argument,
                     OwnerOnly = true
                 };
+            }
+
+            if (ContainsAny(normalized, "laporan bulanan", "trend bulanan", "tren bulanan"))
+            {
+                string? periodArgument = TryExtractSalesPeriodArgument(userMessage);
+                if (periodArgument?.StartsWith("month_name:", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return new DeterministicIntent { Kind = "sales_summary", Argument = periodArgument, OwnerOnly = true };
+                }
+
+                return new DeterministicIntent { Kind = "monthly_trend", Argument = userMessage, OwnerOnly = true };
             }
 
             string? salesPeriod = TryExtractSalesPeriodArgument(userMessage);
@@ -9368,7 +9751,7 @@ namespace SmartSembakoAssistant.Services
             {
                 TopicType.LoyalCustomers => await GetLoyalCustomerSourceAsync(),
                 TopicType.AtRiskCustomers => await GetAtRiskCustomerSourceAsync(),
-                _ => (await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true))
+                _ => (await AttachCustomerStatusNotesAsync(await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true)))
                     .OrderByDescending(customer => customer.PurchaseCount)
                     .ThenByDescending(customer => customer.TotalSpent)
                     .ThenBy(customer => customer.Name)
@@ -9920,7 +10303,7 @@ namespace SmartSembakoAssistant.Services
             {
                 TopicType.LoyalCustomers => await GetLoyalCustomerSourceAsync(),
                 TopicType.AtRiskCustomers => await GetAtRiskCustomerSourceAsync(),
-                _ => (await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true))
+                _ => (await AttachCustomerStatusNotesAsync(await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true)))
                     .OrderByDescending(customer => customer.PurchaseCount)
                     .ThenByDescending(customer => customer.TotalSpent)
                     .ThenBy(customer => customer.Name)
@@ -10327,13 +10710,19 @@ namespace SmartSembakoAssistant.Services
                 return "Transport pengiriman file belum siap.";
             }
 
-            var customers = (await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true)).ToList();
+            var customers = await AttachCustomerStatusNotesAsync(await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true));
             var suppliers = (await _posDbService.GetSuppliersAsync(null, null)).ToList();
             var products = (await _posDbService.GetAllProductsAsync()).OrderBy(product => product.Name).ToList();
             var receivables = await _posDbService.GetCustomerReceivablesAsync();
             DateTime monthStart = GetMonthStart(DateTime.Today);
+            DateTime lastMonthStart = monthStart.AddMonths(-1);
+            DateTime lastMonthEnd = monthStart.AddDays(-1);
+            DateTime last30Start = DateTime.Today.AddDays(-29);
             var monthSales = await _posDbService.GetSalesLineItemsAsync(monthStart, DateTime.Today);
+            var lastMonthSales = await _posDbService.GetSalesLineItemsAsync(lastMonthStart, lastMonthEnd);
+            var last30Sales = await _posDbService.GetSalesLineItemsAsync(last30Start, DateTime.Today);
             var criticalStock = await _posDbService.GetCriticalStockProductsAsync();
+            var tierAZeroCost = await _posDbService.GetZeroCostProductsAsync();
 
             string tempDir = Path.Combine(Path.GetTempPath(), $"ssa_export_{Guid.NewGuid():N}");
             string zipPath = Path.Combine(Path.GetTempPath(), $"ssa_bundle_{DateTime.Now:yyyyMMdd_HHmmss}.zip");
@@ -10342,11 +10731,41 @@ namespace SmartSembakoAssistant.Services
             {
                 Directory.CreateDirectory(tempDir);
                 await File.WriteAllTextAsync(Path.Combine(tempDir, "produk.csv"), CsvExportHelper.GenerateStockCsv(products), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "produk_semua.csv"), CsvExportHelper.GenerateStockCsv(products), new UTF8Encoding(false));
                 await File.WriteAllTextAsync(Path.Combine(tempDir, "pelanggan.csv"), CsvExportHelper.GenerateCustomerCsv(customers), new UTF8Encoding(false));
                 await File.WriteAllTextAsync(Path.Combine(tempDir, "supplier.csv"), CsvExportHelper.GenerateSupplierCsv(suppliers), new UTF8Encoding(false));
                 await File.WriteAllTextAsync(Path.Combine(tempDir, "piutang.csv"), CsvExportHelper.GenerateReceivableCsv(receivables), new UTF8Encoding(false));
                 await File.WriteAllTextAsync(Path.Combine(tempDir, "transaksi_bulan_ini.csv"), CsvExportHelper.GenerateSalesCsv(monthSales, "Bulan Ini"), new UTF8Encoding(false));
-                await File.WriteAllTextAsync(Path.Combine(tempDir, "stok_kritis.csv"), CsvExportHelper.GenerateStockCsv(criticalStock), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "transaksi_bulan_lalu.csv"), CsvExportHelper.GenerateSalesCsv(lastMonthSales, "Bulan Lalu"), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "transaksi_30_hari.csv"), CsvExportHelper.GenerateSalesCsv(last30Sales, "30 Hari Terakhir"), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "stok_kritis.csv"), CsvExportHelper.GenerateCriticalStockCsv(criticalStock), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "stok_minus_top.csv"), CsvExportHelper.GenerateCriticalStockCsv(products.Where(product => (product.Stock ?? 0) < 0).OrderBy(product => product.Stock).ToList()), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "stok_habis.csv"), CsvExportHelper.GenerateCriticalStockCsv(products.Where(product => (product.Stock ?? 0) == 0).OrderBy(product => product.Name).ToList()), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "stok_rendah.csv"), CsvExportHelper.GenerateCriticalStockCsv(products.Where(product => (product.Stock ?? 0) > 0 && (product.Stock ?? 0) <= 10).OrderBy(product => product.Stock).ThenBy(product => product.Name).ToList()), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "produk_tanpa_modal_tier_a.csv"), CsvExportHelper.GenerateZeroCostTierACsv(tierAZeroCost), new UTF8Encoding(false));
+
+                string auditDir = Path.Combine(tempDir, "audit_produk");
+                Directory.CreateDirectory(auditDir);
+                await WriteProductAuditCsvAsync(auditDir, "produk_cost_0.csv", products.Where(product => (product.PurchasePrice ?? 0) == 0));
+                await WriteProductAuditCsvAsync(auditDir, "produk_cost_minus.csv", products.Where(product => (product.PurchasePrice ?? 0) < 0));
+                await WriteProductAuditCsvAsync(auditDir, "produk_stok_minus.csv", products.Where(product => (product.Stock ?? 0) < 0));
+                await WriteProductAuditCsvAsync(auditDir, "produk_stok_0.csv", products.Where(product => (product.Stock ?? 0) == 0));
+                await WriteProductAuditCsvAsync(auditDir, "produk_harga_jual_0.csv", products.Where(product => (product.SellingPrice ?? 0) == 0));
+                await WriteProductAuditCsvAsync(auditDir, "produk_harga_jual_minus.csv", products.Where(product => (product.SellingPrice ?? 0) < 0));
+                await WriteProductAuditCsvAsync(auditDir, "produk_kategori_kosong.csv", products.Where(product => string.IsNullOrWhiteSpace(product.Category)));
+                await File.WriteAllTextAsync(Path.Combine(auditDir, "produk_audit_summary.csv"), CsvExportHelper.GenerateProductAuditSummaryCsv(products), new UTF8Encoding(false));
+                await File.WriteAllTextAsync(Path.Combine(tempDir, "manifest.csv"), BuildExportManifestCsv(new Dictionary<string, int>
+                {
+                    ["produk.csv"] = products.Count,
+                    ["produk_semua.csv"] = products.Count,
+                    ["pelanggan.csv"] = customers.Count,
+                    ["supplier.csv"] = suppliers.Count,
+                    ["piutang.csv"] = receivables.Count,
+                    ["transaksi_bulan_ini.csv"] = monthSales.Count,
+                    ["transaksi_bulan_lalu.csv"] = lastMonthSales.Count,
+                    ["transaksi_30_hari.csv"] = last30Sales.Count,
+                    ["stok_kritis.csv"] = criticalStock.Count
+                }), new UTF8Encoding(false));
 
                 ZipFile.CreateFromDirectory(tempDir, zipPath);
                 string caption = $"Bundle export lengkap Smart Sembako Assistant ({DateTime.Now:dd/MM/yyyy HH:mm})";
@@ -12946,13 +13365,8 @@ namespace SmartSembakoAssistant.Services
 
             if (intent?.Kind == "profit_explain")
             {
-                var profit = await _posDbService.GetProfitCalculationExplanationAsync(DateTime.Today, DateTime.Today);
-                sb.AppendLine("Data profit hari ini:");
-                sb.AppendLine($"- Transaksi: {profit.TransactionCount}");
-                sb.AppendLine($"- Omzet: {FormatCurrency(profit.Revenue)}");
-                sb.AppendLine($"- HPP/modal barang: {FormatCurrency(profit.CostOfGoodsSold)}");
-                sb.AppendLine($"- Profit kotor: {FormatCurrency(profit.GrossProfit)}");
-                sb.AppendLine($"- Margin: {profit.MarginPercent:0.##}%");
+                var profit = await _posDbService.GetProfitExplanationContextAsync(DateTime.Today, DateTime.Today);
+                sb.AppendLine(PosDbService.BuildPlainLanguageProfitExplanation(profit));
                 return sb.ToString().TrimEnd();
             }
 
@@ -13515,6 +13929,47 @@ namespace SmartSembakoAssistant.Services
             return null;
         }
 
+        private static string? ExtractPromotionProductKeyword(string text)
+        {
+            string? direct = ExtractKeywordAfterAny(text, "promo produk", "diskon produk", "promo", "diskon");
+            if (!string.IsNullOrWhiteSpace(direct))
+            {
+                return CleanIntentProductKeyword(direct);
+            }
+
+            return CleanIntentProductKeyword(text);
+        }
+
+        private static string? ExtractProfitProductKeyword(string text)
+        {
+            return CleanIntentProductKeyword(text);
+        }
+
+        private static string? CleanIntentProductKeyword(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            string value = text;
+            foreach (string word in new[]
+                     {
+                         "kenapa", "mengapa", "profit", "laba", "untung", "keuntungan", "produk",
+                         "minus", "rugi", "kecil", "promo", "diskon", "diskonnya", "promonya",
+                         "apa", "berapa", "lagi", "aktif", "sih", "ya", "dong"
+                     })
+            {
+                value = Regex.Replace(value, $@"\b{Regex.Escape(word)}\b", "", RegexOptions.IgnoreCase);
+            }
+
+            value = value.Replace("?", "", StringComparison.Ordinal)
+                .Replace(":", "", StringComparison.Ordinal)
+                .Trim();
+
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+
         private static string? ExtractPurchaseHistoryProductKeyword(string text)
         {
             string? direct = ExtractKeywordAfterAny(
@@ -13653,6 +14108,11 @@ namespace SmartSembakoAssistant.Services
             if (_posDbService == null)
             {
                 return "Database pos.db belum dikonfigurasi.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(customer.Id))
+            {
+                customer.StatusNote = await _databaseService.GetCustomerStatusNoteAsync(customer.Id);
             }
 
             string senderKey = BuildSenderStateKey(context);
@@ -13825,6 +14285,27 @@ namespace SmartSembakoAssistant.Services
                     // Abaikan kegagalan cleanup file temp.
                 }
             }
+        }
+
+        private static async Task WriteProductAuditCsvAsync(string directory, string fileName, IEnumerable<Product> products)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, fileName),
+                CsvExportHelper.GenerateStockCsv(products.OrderBy(product => product.Name).ToList()),
+                new UTF8Encoding(false));
+        }
+
+        private static string BuildExportManifestCsv(IReadOnlyDictionary<string, int> fileRowCounts)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("\"File\",\"RowCount\",\"GeneratedAt\"");
+            string generatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            foreach (var item in fileRowCounts.OrderBy(item => item.Key))
+            {
+                sb.AppendLine($"\"{item.Key}\",\"{item.Value}\",\"{generatedAt}\"");
+            }
+
+            return sb.ToString();
         }
 
         private async Task SendDocumentForChannelAsync(
@@ -14247,6 +14728,11 @@ namespace SmartSembakoAssistant.Services
                 return "last_month";
             }
 
+            if (ContainsAny(normalized, "minggu kemarin", "minggu lalu", "pekan lalu"))
+            {
+                return "last_week";
+            }
+
             if (normalized.Contains("minggu ini", StringComparison.OrdinalIgnoreCase))
             {
                 return "week";
@@ -14255,11 +14741,6 @@ namespace SmartSembakoAssistant.Services
             if (normalized.Contains("bulan ini", StringComparison.OrdinalIgnoreCase))
             {
                 return "month";
-            }
-
-            if (normalized.Contains("minggu lalu", StringComparison.OrdinalIgnoreCase))
-            {
-                return "last_week";
             }
 
             if (normalized.Contains("bulan lalu", StringComparison.OrdinalIgnoreCase))
@@ -14350,10 +14831,13 @@ namespace SmartSembakoAssistant.Services
             return ContainsAny(normalized,
                 "penjualan",
                 "omzet",
+                "laporan",
+                "cek laporan",
                 "laporan penjualan",
                 "data penjualan",
                 "cek penjualan",
-                "info penjualan");
+                "info penjualan") &&
+                   !ContainsAny(normalized, "stok", "piutang", "hutang", "dokumen", "nota", "supplier", "pelanggan", "kasir");
         }
 
         private static bool LooksLikeStandaloneSalesPeriodQuery(string normalized)
@@ -14362,6 +14846,7 @@ namespace SmartSembakoAssistant.Services
                    Regex.IsMatch(normalized, @"\b\d{1,2}\s+[a-z]{3,9}\s+\d{4}\b", RegexOptions.IgnoreCase) ||
                    Regex.IsMatch(normalized, @"\b\d{1,2}\s+[a-z]{3,9}\b", RegexOptions.IgnoreCase) ||
                    Regex.IsMatch(normalized, @"\b\d{1,2}\s*bulan\s*(?:lalu|yang lalu|kemarin)\b", RegexOptions.IgnoreCase) ||
+                   Regex.IsMatch(normalized, @"\b(?:bulan|minggu|pekan)\s+(?:lalu|kemarin)\b", RegexOptions.IgnoreCase) ||
                    Regex.IsMatch(normalized, @"\b\d{1,3}\s+hari(?:\s+(?:terakhir|ini))?\b", RegexOptions.IgnoreCase) ||
                    Regex.IsMatch(normalized, @"\b(?:tanggal|tgl)\s+\d{1,2}\b", RegexOptions.IgnoreCase) ||
                    Regex.IsMatch(normalized, @"\bq[1-4]\s*20\d{2}\b", RegexOptions.IgnoreCase);
@@ -15523,6 +16008,16 @@ namespace SmartSembakoAssistant.Services
 
         private static string BuildCustomerStatus(CustomerInfo customer)
         {
+            if (string.Equals(customer.StatusNote?.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"Nonaktif ({FormatInactiveReason(customer.StatusNote.ReasonCategory)})";
+            }
+
+            if (string.Equals(customer.StatusNote?.Status, "MaybeInactive", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"Perlu cek ({FormatInactiveReason(customer.StatusNote.ReasonCategory)})";
+            }
+
             int days = GetDaysSince(customer.LastPurchaseDate);
             if (days > 120)
             {

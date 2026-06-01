@@ -129,6 +129,20 @@ namespace SmartSembakoAssistant.Models
         public int PurchaseCount { get; set; }
         public decimal TotalSpent { get; set; }
         public DateTime? LastPurchaseDate { get; set; }
+        public CustomerStatusNote? StatusNote { get; set; }
+    }
+
+    public class CustomerStatusNote
+    {
+        public string CustomerId { get; set; } = "";
+        public string CustomerNameSnapshot { get; set; } = "";
+        public string Status { get; set; } = "Active";
+        public string ReasonCategory { get; set; } = "";
+        public string OriginalMessage { get; set; } = "";
+        public decimal Confidence { get; set; }
+        public string CreatedBy { get; set; } = "";
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
+        public DateTime UpdatedAt { get; set; } = DateTime.Now;
     }
 
     /// <summary>
@@ -233,6 +247,17 @@ namespace SmartSembakoAssistant.Models
         public decimal Adjustment { get; set; }
         public string? Unit { get; set; }
         public decimal Total { get; set; }
+    }
+
+    public class PurchaseSheetRowMetadata
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public string? RawOcrName { get; set; }
+        public string? MappingSource { get; set; }
+        public string? TrustLevel { get; set; }
+        public int? LineIndex { get; set; }
+        public string? CorrelationId { get; set; }
     }
 
     public class BulkDocumentResult
@@ -391,6 +416,10 @@ namespace SmartSembakoAssistant.Models
         public decimal Revenue { get; set; }
         public decimal CostOfGoodsSold { get; set; }
         public decimal GrossProfit { get; set; }
+        public decimal ItemDiscountAmount { get; set; }
+        public decimal DocumentDiscountAmount { get; set; }
+        public decimal TaxAmount { get; set; }
+        public decimal ProfitAfterTax { get; set; }
         public decimal MarginPercent => Revenue > 0 ? GrossProfit / Revenue * 100 : 0;
     }
 
@@ -480,8 +509,95 @@ namespace SmartSembakoAssistant.Models
         public string? ProductName { get; set; }
         public decimal Quantity { get; set; }
         public decimal Price { get; set; }
+        public decimal Cost { get; set; }
+        public decimal GrossTotal { get; set; }
+        public decimal DiscountAmount { get; set; }
+        public decimal DocumentDiscountAmount { get; set; }
+        public decimal TaxAmount { get; set; }
+        public decimal MarginPercent { get; set; }
+        public decimal AroniumProfit { get; set; }
+        public decimal ProfitAfterTax { get; set; }
         public decimal Total { get; set; }
         public decimal Profit { get; set; }
+    }
+
+    public class ActivePromotionInfo
+    {
+        public int PromotionId { get; set; }
+        public string PromotionName { get; set; } = "";
+        public string ProductId { get; set; } = "";
+        public string ProductName { get; set; } = "";
+        public decimal Value { get; set; }
+        public int DiscountType { get; set; }
+        public bool IsConditional { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal QuantityLimit { get; set; }
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
+        public string HumanReadableRule { get; set; } = "";
+    }
+
+    public class ActiveTaxInfo
+    {
+        public int TaxId { get; set; }
+        public string Name { get; set; } = "";
+        public decimal Rate { get; set; }
+        public bool IsFixed { get; set; }
+        public bool IsTaxOnTotal { get; set; }
+        public bool IsEnabled { get; set; }
+        public int LinkedProductCount { get; set; }
+        public string HumanReadableRule { get; set; } = "";
+    }
+
+    public class SalesProfitBreakdown
+    {
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+        public int TransactionCount { get; set; }
+        public decimal Revenue { get; set; }
+        public decimal Cost { get; set; }
+        public decimal AroniumProfit { get; set; }
+        public decimal TaxAmount { get; set; }
+        public decimal ProfitAfterTax { get; set; }
+        public decimal ItemDiscountAmount { get; set; }
+        public decimal DocumentDiscountAmount { get; set; }
+        public decimal NoCostRevenue { get; set; }
+        public decimal NoCostProfit { get; set; }
+        public int NoCostItemCount { get; set; }
+        public decimal ItemsSold { get; set; }
+        public decimal MarginPercent => Revenue > 0 ? AroniumProfit / Revenue * 100 : 0;
+    }
+
+    public class ProfitExplanationContext
+    {
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+        public decimal RevenueAfterDiscount { get; set; }
+        public decimal CostOfGoodsSold { get; set; }
+        public decimal AroniumProfit { get; set; }
+        public decimal ItemDiscountAmount { get; set; }
+        public decimal DocumentDiscountAmount { get; set; }
+        public decimal TaxAmount { get; set; }
+        public decimal ProfitAfterTax { get; set; }
+        public int TransactionCount { get; set; }
+        public decimal ItemsSold { get; set; }
+        public List<ProductProfitCase> NotableCases { get; set; } = new();
+        public List<ActivePromotionInfo> ActivePromotions { get; set; } = new();
+        public List<ActiveTaxInfo> ActiveTaxes { get; set; } = new();
+    }
+
+    public class ProductProfitCase
+    {
+        public string ProductId { get; set; } = "";
+        public string ProductName { get; set; } = "";
+        public decimal Quantity { get; set; }
+        public decimal GrossTotal { get; set; }
+        public decimal RevenueAfterDiscount { get; set; }
+        public decimal Cost { get; set; }
+        public decimal Profit { get; set; }
+        public decimal MarginPercent { get; set; }
+        public string? PromotionName { get; set; }
+        public string Explanation { get; set; } = "";
     }
 
     /// <summary>

@@ -205,6 +205,9 @@ namespace SmartSembakoAssistant.Views
                 TxtSheetsCredentialPath.Text = config.GoogleSheets.CredentialsJsonPath ?? "";
                 TxtSheetsSpreadsheetId.Text = config.GoogleSheets.SpreadsheetId ?? "";
                 TxtSheetsPurchaseTabName.Text = config.GoogleSheets.PurchaseSheetName ?? "Pembelian";
+                ChkSheetsEnableFormatting.IsChecked = config.GoogleSheets.EnableFormatting;
+                ChkSheetsEnableConditionalFormatting.IsChecked = config.GoogleSheets.EnableConditionalFormatting;
+                ChkSheetsEnableCharts.IsChecked = config.GoogleSheets.EnableCharts;
                 ClearMappingInputs();
                 TxtOcrValidation.ToolTip = _configService.OcrMappingsPath;
 
@@ -387,7 +390,8 @@ namespace SmartSembakoAssistant.Views
             DgProductMappings.IsEnabled = ocrEnabled;
             BtnExportMappingPackage.IsEnabled = !_mappingTransferBusy && _posDbService != null;
             BtnImportMappingPackage.IsEnabled = !_mappingTransferBusy && _posDbService != null;
-            BtnApplyMappingImport.IsEnabled = !_mappingTransferBusy && _posDbService != null && _lastMappingImportPreview != null;
+            BtnApplyMappingImport.IsEnabled = !_mappingTransferBusy && _posDbService != null && HasApplicableMappingImportPreview();
+            BtnClearMappingPreview.IsEnabled = !_mappingTransferBusy && (_lastMappingImportPreview != null || _mappingImportPreviewRows.Count > 0);
             CmbMappingImportMode.IsEnabled = !_mappingTransferBusy && _posDbService != null;
             TxtConversionParentName.IsEnabled = ocrEnabled;
             TxtConversionChildName.IsEnabled = ocrEnabled;
@@ -412,6 +416,9 @@ namespace SmartSembakoAssistant.Views
             BtnBrowseSheetsCredential.IsEnabled = sheetsEnabled;
             TxtSheetsSpreadsheetId.IsEnabled = sheetsEnabled;
             TxtSheetsPurchaseTabName.IsEnabled = sheetsEnabled;
+            ChkSheetsEnableFormatting.IsEnabled = sheetsEnabled;
+            ChkSheetsEnableConditionalFormatting.IsEnabled = sheetsEnabled;
+            ChkSheetsEnableCharts.IsEnabled = sheetsEnabled;
             BtnPrepareSheets.IsEnabled = sheetsEnabled;
             BtnSyncSheetsDaily.IsEnabled = sheetsEnabled && _posDbService != null;
             BtnTestSheets.IsEnabled = sheetsEnabled;
@@ -696,6 +703,9 @@ namespace SmartSembakoAssistant.Views
             current.GoogleSheets.CredentialsJsonPath = TxtSheetsCredentialPath.Text.Trim();
             current.GoogleSheets.SpreadsheetId = TxtSheetsSpreadsheetId.Text.Trim();
             current.GoogleSheets.PurchaseSheetName = string.IsNullOrWhiteSpace(TxtSheetsPurchaseTabName.Text) ? "Pembelian" : TxtSheetsPurchaseTabName.Text.Trim();
+            current.GoogleSheets.EnableFormatting = ChkSheetsEnableFormatting.IsChecked == true;
+            current.GoogleSheets.EnableConditionalFormatting = ChkSheetsEnableConditionalFormatting.IsChecked == true;
+            current.GoogleSheets.EnableCharts = ChkSheetsEnableCharts.IsChecked == true;
 
             return current;
         }
@@ -1806,8 +1816,26 @@ namespace SmartSembakoAssistant.Views
             _mappingTransferBusy = busy;
             BtnExportMappingPackage.IsEnabled = !busy && _posDbService != null;
             BtnImportMappingPackage.IsEnabled = !busy && _posDbService != null;
-            BtnApplyMappingImport.IsEnabled = !busy && _posDbService != null && _lastMappingImportPreview != null;
+            BtnApplyMappingImport.IsEnabled = !busy && _posDbService != null && HasApplicableMappingImportPreview();
+            BtnClearMappingPreview.IsEnabled = !busy && (_lastMappingImportPreview != null || _mappingImportPreviewRows.Count > 0);
             CmbMappingImportMode.IsEnabled = !busy && _posDbService != null;
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                TxtMappingTransferStatus.Text = status;
+            }
+        }
+
+        private bool HasApplicableMappingImportPreview()
+        {
+            return _lastMappingImportPreview?.Rows.Any(row => row.CanApply) == true;
+        }
+
+        private void ClearMappingImportPreview(string? status = null)
+        {
+            _lastMappingImportPreview = null;
+            _mappingImportPreviewRows.Clear();
+            BtnApplyMappingImport.IsEnabled = false;
+            BtnClearMappingPreview.IsEnabled = false;
             if (!string.IsNullOrWhiteSpace(status))
             {
                 TxtMappingTransferStatus.Text = status;
@@ -1886,9 +1914,11 @@ namespace SmartSembakoAssistant.Views
 
                 if (dialog.ShowDialog() != true)
                 {
+                    ClearMappingImportPreview("Import preview dibatalkan. Preview lama dibersihkan.");
                     return;
                 }
 
+                ClearMappingImportPreview();
                 SetMappingTransferBusy(true, "Membuat preview import...");
                 _lastMappingImportPreview = await CreateMappingTransferService()
                     .PreviewImportAsync(dialog.FileName, GetSelectedMappingImportMode());
@@ -1899,10 +1929,12 @@ namespace SmartSembakoAssistant.Views
                 }
 
                 TxtMappingTransferStatus.Text = $"Preview: {_lastMappingImportPreview.Summary}";
-                BtnApplyMappingImport.IsEnabled = true;
+                BtnApplyMappingImport.IsEnabled = HasApplicableMappingImportPreview();
+                BtnClearMappingPreview.IsEnabled = _mappingImportPreviewRows.Count > 0;
             }
             catch (Exception ex)
             {
+                ClearMappingImportPreview();
                 TxtMappingTransferStatus.Text = $"Import preview gagal: {ex.Message}";
                 ToastHelper.ShowError("Mapping Transfer", ex.Message);
             }
@@ -1930,6 +1962,7 @@ namespace SmartSembakoAssistant.Views
                     MessageBoxImage.Question);
                 if (confirm != MessageBoxResult.Yes)
                 {
+                    ClearMappingImportPreview("Apply import dibatalkan. Preview lama dibersihkan.");
                     return;
                 }
 
@@ -1939,6 +1972,7 @@ namespace SmartSembakoAssistant.Views
                 await RefreshOcrMappingRegistryAsync();
                 await RefreshUnitConversionsAsync();
                 await RefreshSharedStockGroupsAsync();
+                ClearMappingImportPreview($"Apply selesai: {summary}");
                 ToastHelper.ShowSuccess("Mapping Transfer", $"Import selesai. Applied {summary.Applied}, skipped {summary.Skipped}.");
             }
             catch (Exception ex)
@@ -1950,6 +1984,11 @@ namespace SmartSembakoAssistant.Views
             {
                 SetMappingTransferBusy(false);
             }
+        }
+
+        private void BtnClearMappingPreview_Click(object sender, RoutedEventArgs e)
+        {
+            ClearMappingImportPreview("Preview import dibersihkan.");
         }
 
         private async void BtnSearchParentConversionProduct_Click(object sender, RoutedEventArgs e)

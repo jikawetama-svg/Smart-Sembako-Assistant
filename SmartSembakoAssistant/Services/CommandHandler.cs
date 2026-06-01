@@ -1,3 +1,4 @@
+using System.Text;
 using SmartSembakoAssistant.Models;
 
 namespace SmartSembakoAssistant.Services
@@ -97,17 +98,24 @@ namespace SmartSembakoAssistant.Services
                 return "Database pos.db belum dikonfigurasi.";
             }
 
-            decimal revenue = await _posDbService.GetTodayRevenueAsync();
-            decimal profit = await _posDbService.GetTodayProfitAsync();
-            int transactionCount = await _posDbService.GetSalesTransactionCountAsync(DateTime.Today, DateTime.Today);
+            var breakdown = await _posDbService.GetSalesProfitBreakdownAsync(DateTime.Today, DateTime.Today);
 
             return isOwner
-                ? $"Laporan hari ini\nRevenue: Rp {revenue:N0}\nProfit: Rp {profit:N0}\nTransaksi: {transactionCount}"
-                : $"Laporan hari ini\nRevenue: Rp {revenue:N0}\nTransaksi: {transactionCount}";
+                ? $"Laporan hari ini\nRevenue setelah diskon: {FormatCurrency(breakdown.Revenue)}\nModal: {FormatCurrency(breakdown.Cost)}\nProfit Aronium: {FormatCurrency(breakdown.AroniumProfit)}\nTransaksi: {breakdown.TransactionCount}"
+                : $"Laporan hari ini\nRevenue: {FormatCurrency(breakdown.Revenue)}\nTransaksi: {breakdown.TransactionCount}";
         }
 
         private async Task<string> HandleNaturalLanguageAsync(string message, string userId, string channel, bool isOwner)
         {
+            if (_posDbService != null && isOwner)
+            {
+                string? deterministicResponse = await TryHandleProfitDiscountTaxIntentAsync(message);
+                if (!string.IsNullOrWhiteSpace(deterministicResponse))
+                {
+                    return deterministicResponse;
+                }
+            }
+
             long chatId = long.TryParse(userId, out var parsed) ? parsed : 0;
             var history = await _databaseService.GetRecentConversationsAsync(chatId, 5);
             var historyTexts = history.Select(h => $"{h.Role}: {h.Message}").ToList();
@@ -130,6 +138,199 @@ namespace SmartSembakoAssistant.Services
             });
 
             return response;
+        }
+
+        private async Task<string?> TryHandleProfitDiscountTaxIntentAsync(string message)
+        {
+            if (_posDbService == null)
+            {
+                return null;
+            }
+
+            string normalized = message.ToLowerInvariant();
+            bool mentionsProfit = ContainsAny(normalized, "profit", "laba", "untung", "keuntungan", "margin", "omzet");
+            bool mentionsFormula = ContainsAny(normalized, "cara hitung", "rumus", "dihitung", "ngitung", "mekanisme", "beda sama omzet", "termasuk diskon");
+            bool mentionsPromo = ContainsAny(normalized, "promo", "diskon", "gratis");
+            bool mentionsTax = ContainsAny(normalized, "pajak", "qris", "admin");
+            bool mentionsNegative = ContainsAny(normalized, "minus", "rugi", "kecil");
+
+            if (mentionsTax && ContainsAny(normalized, "aktif", "ada", "berapa", "profit setelah", "hari ini"))
+            {
+                var (start, end) = ResolveSimplePeriod(normalized);
+                var taxes = await _posDbService.GetActiveTaxesAsync();
+                var breakdown = await _posDbService.GetSalesProfitBreakdownAsync(start, end);
+                return BuildTaxAnswer(taxes, breakdown);
+            }
+
+            if (mentionsPromo)
+            {
+                string? productQuery = ExtractProductQuery(message, "promo", "diskon", "gratis", "produk", "apa", "saja", "yang", "lagi", "aktif");
+                var promotions = string.IsNullOrWhiteSpace(productQuery) || ContainsAny(normalized, "aktif", "produk apa", "apa saja")
+                    ? await _posDbService.GetActivePromotionsAsync(DateTime.Today)
+                    : await _posDbService.GetProductPromotionStatusAsync(productQuery, DateTime.Today);
+                return BuildPromotionAnswer(promotions, productQuery);
+            }
+
+            if (mentionsProfit || mentionsFormula || mentionsNegative)
+            {
+                var (start, end) = ResolveSimplePeriod(normalized);
+                string? productQuery = mentionsNegative
+                    ? ExtractProductQuery(message, "kenapa", "profit", "minus", "rugi", "kecil", "produk")
+                    : null;
+                var context = await _posDbService.GetProfitExplanationContextAsync(start, end, productQuery);
+                return BuildProfitAnswer(context, mentionsFormula, mentionsTax, productQuery);
+            }
+
+            return null;
+        }
+
+        private static string BuildProfitAnswer(
+            ProfitExplanationContext context,
+            bool includeFormula,
+            bool afterTax,
+            string? productQuery)
+        {
+            if (!string.IsNullOrWhiteSpace(productQuery) && context.NotableCases.Any())
+            {
+                var item = context.NotableCases[0];
+                var sbProduct = new StringBuilder();
+                sbProduct.AppendLine($"{item.ProductName}:");
+                sbProduct.AppendLine($"Total setelah diskon: {FormatCurrency(item.RevenueAfterDiscount)}");
+                sbProduct.AppendLine($"Modal: {FormatCurrency(item.Cost)}");
+                sbProduct.AppendLine($"Profit: {FormatCurrency(item.Profit)}");
+                if (!string.IsNullOrWhiteSpace(item.PromotionName))
+                {
+                    sbProduct.AppendLine($"Promo terkait: {item.PromotionName}");
+                }
+                sbProduct.Append(item.Explanation);
+                return sbProduct.ToString();
+            }
+
+            if (includeFormula)
+            {
+                return PosDbService.BuildPlainLanguageProfitExplanation(context);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Profit: {FormatCurrency(context.AroniumProfit)}");
+            sb.AppendLine($"Total penjualan setelah diskon: {FormatCurrency(context.RevenueAfterDiscount)}");
+            sb.AppendLine($"Modal barang: {FormatCurrency(context.CostOfGoodsSold)}");
+
+            if (context.ItemDiscountAmount != 0 || context.DocumentDiscountAmount != 0)
+            {
+                sb.AppendLine($"Diskon item: {FormatCurrency(context.ItemDiscountAmount)}");
+                sb.AppendLine($"Diskon nota: {FormatCurrency(context.DocumentDiscountAmount)}");
+            }
+
+            if (context.TaxAmount != 0 || afterTax)
+            {
+                sb.AppendLine($"Pajak/biaya transaksi: {FormatCurrency(context.TaxAmount)}");
+                sb.AppendLine($"Profit setelah pajak/biaya: {FormatCurrency(context.ProfitAfterTax)}");
+            }
+
+            sb.Append("Angka profit default mengikuti Aronium: total setelah diskon dikurangi modal barang.");
+            return sb.ToString();
+        }
+
+        private static string BuildPromotionAnswer(List<ActivePromotionInfo> promotions, string? productQuery)
+        {
+            if (!promotions.Any())
+            {
+                return string.IsNullOrWhiteSpace(productQuery)
+                    ? "Tidak ada promo aktif yang terbaca dari Aronium."
+                    : $"Tidak ada promo aktif untuk \"{productQuery}\" di Aronium.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(productQuery))
+            {
+                var promo = promotions[0];
+                string period = $"{promo.StartDate:dd/MM/yyyy} sampai {promo.EndDate:dd/MM/yyyy}";
+                return $"{promo.ProductName} sedang ikut promo {promo.PromotionName}.\nAturannya: {promo.HumanReadableRule}.\nPeriode: {period}.";
+            }
+
+            var grouped = promotions.GroupBy(p => p.PromotionName).OrderBy(g => g.Key);
+            var sb = new StringBuilder();
+            sb.AppendLine("Promo aktif di Aronium:");
+            foreach (var group in grouped)
+            {
+                sb.AppendLine($"- {group.Key}: {group.First().HumanReadableRule}");
+                foreach (var item in group.Take(8))
+                {
+                    sb.AppendLine($"  - {item.ProductName}");
+                }
+                if (group.Count() > 8)
+                {
+                    sb.AppendLine($"  - +{group.Count() - 8} produk lain");
+                }
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string BuildTaxAnswer(List<ActiveTaxInfo> taxes, SalesProfitBreakdown breakdown)
+        {
+            var sb = new StringBuilder();
+            if (!taxes.Any())
+            {
+                sb.AppendLine("Tidak ada pajak/biaya aktif yang terbaca dari Aronium.");
+            }
+            else
+            {
+                sb.AppendLine("Pajak/biaya aktif di Aronium:");
+                foreach (var tax in taxes)
+                {
+                    sb.AppendLine($"- {tax.Name}: {tax.HumanReadableRule}");
+                }
+            }
+
+            sb.AppendLine();
+            sb.AppendLine($"Yang benar-benar masuk transaksi periode ini: {FormatCurrency(breakdown.TaxAmount)}.");
+            sb.AppendLine($"Profit sesuai Aronium: {FormatCurrency(breakdown.AroniumProfit)}.");
+            sb.Append($"Profit setelah pajak/biaya: {FormatCurrency(breakdown.ProfitAfterTax)}.");
+            return sb.ToString();
+        }
+
+        private static (DateTime Start, DateTime End) ResolveSimplePeriod(string normalized)
+        {
+            DateTime today = DateTime.Today;
+            if (ContainsAny(normalized, "bulan ini", "bulanan"))
+            {
+                return (new DateTime(today.Year, today.Month, 1), today);
+            }
+
+            if (ContainsAny(normalized, "minggu ini", "pekan ini", "weekly"))
+            {
+                int offset = ((int)today.DayOfWeek + 6) % 7;
+                return (today.AddDays(-offset), today);
+            }
+
+            return (today, today);
+        }
+
+        private static string? ExtractProductQuery(string message, params string[] wordsToRemove)
+        {
+            string result = message;
+            foreach (string word in wordsToRemove)
+            {
+                result = result.Replace(word, "", StringComparison.OrdinalIgnoreCase);
+            }
+
+            result = result
+                .Replace("?", "", StringComparison.Ordinal)
+                .Replace(":", "", StringComparison.Ordinal)
+                .Trim();
+
+            return string.IsNullOrWhiteSpace(result) ? null : result;
+        }
+
+        private static bool ContainsAny(string text, params string[] keywords)
+        {
+            return keywords.Any(keyword => text.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string FormatCurrency(decimal value)
+        {
+            return $"Rp {value:N0}";
         }
 
         private string BuildHelpMessage(bool isOwner)

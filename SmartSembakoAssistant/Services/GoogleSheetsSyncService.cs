@@ -16,19 +16,34 @@ namespace SmartSembakoAssistant.Services
             "Stok Rendah",
             "Total Piutang",
             "Produk Tanpa Modal",
+            "Produk Harga Jual 0/Minus",
             "SyncedAt"
         };
 
         private static readonly IReadOnlyList<string> CriticalStockHeaders = new[]
         {
-            "ProductId",
-            "SKU",
-            "Produk",
+            "Kode",
+            "Nama",
             "Stok",
             "Satuan",
-            "Status",
+            "Harga Beli",
             "Harga Jual",
-            "Rekomendasi",
+            "Nilai Stok",
+            "Kategori",
+            "Status Audit",
+            "SyncedAt"
+        };
+
+        private static readonly IReadOnlyList<string> ProductAuditHeaders = new[]
+        {
+            "Kode",
+            "Nama",
+            "Stok",
+            "Satuan",
+            "Harga Beli",
+            "Harga Jual",
+            "Kategori",
+            "Audit Flags",
             "SyncedAt"
         };
 
@@ -56,24 +71,7 @@ namespace SmartSembakoAssistant.Services
             "SyncedAt"
         };
 
-        private static readonly IReadOnlyList<string> PurchaseHeaders = new[]
-        {
-            "Tanggal",
-            "No Dokumen",
-            "Supplier",
-            "Produk",
-            "Qty",
-            "Satuan",
-            "Harga Satuan",
-            "Total",
-            "Status",
-            "ProductId",
-            "OldStock",
-            "NewStock",
-            "Source",
-            "CorrelationId",
-            "SyncedAt"
-        };
+        private static readonly IReadOnlyList<string> PurchaseHeaders = GoogleSheetsSchema.PurchaseHeaders;
 
         private readonly ConfigService _configService;
         private readonly LoggingService _loggingService;
@@ -99,6 +97,7 @@ namespace SmartSembakoAssistant.Services
                 EnsureEnabled();
                 await _googleSheetsService.EnsureSheetWithHeaderAsync("Dashboard", DashboardHeaders);
                 await _googleSheetsService.EnsureSheetWithHeaderAsync("Stok_Kritis", CriticalStockHeaders);
+                await _googleSheetsService.EnsureSheetWithHeaderAsync("Produk_Audit", ProductAuditHeaders);
                 await _googleSheetsService.EnsureSheetWithHeaderAsync("Penjualan_Harian", DailySalesHeaders);
                 await _googleSheetsService.EnsureSheetWithHeaderAsync("Piutang", ReceivableHeaders);
                 await SyncPurchaseHeadersAsync();
@@ -120,6 +119,7 @@ namespace SmartSembakoAssistant.Services
                 EnsureEnabled();
                 await SyncDashboardAsync(date);
                 await SyncCriticalStockAsync();
+                await SyncProductAuditAsync();
                 await SyncDailySalesAsync(date.Date, date.Date);
                 await SyncReceivablesAsync();
 
@@ -158,6 +158,7 @@ namespace SmartSembakoAssistant.Services
                 ["Stok Rendah"] = products.Count(product => product.Stock.GetValueOrDefault() > 0 && product.Stock.GetValueOrDefault() <= 10),
                 ["Total Piutang"] = totalReceivable,
                 ["Produk Tanpa Modal"] = noCostCount,
+                ["Produk Harga Jual 0/Minus"] = products.Count(product => product.SellingPrice.GetValueOrDefault() <= 0),
                 ["SyncedAt"] = syncedAt
             };
 
@@ -182,18 +183,46 @@ namespace SmartSembakoAssistant.Services
             string syncedAt = NowString();
             var rows = products.Select(product => (IReadOnlyList<object>)new List<object>
             {
-                product.Id ?? string.Empty,
                 product.Sku ?? string.Empty,
                 product.Name ?? string.Empty,
                 product.Stock ?? 0,
                 product.Unit ?? "Pcs",
-                GetStockStatus(product.Stock),
+                product.PurchasePrice ?? 0,
                 product.SellingPrice ?? 0,
-                GetStockRecommendation(product.Stock),
+                (product.Stock ?? 0) * (product.PurchasePrice ?? 0),
+                product.Category ?? string.Empty,
+                GetStockStatus(product.Stock),
                 syncedAt
             }).ToList();
 
             await _googleSheetsService.ReplaceSheetRowsAsync("Stok_Kritis", CriticalStockHeaders, rows);
+        }
+
+        public async Task SyncProductAuditAsync()
+        {
+            EnsureEnabled();
+            var posDbService = EnsurePosDb();
+            var products = (await posDbService.GetAllProductsAsync())
+                .Select(product => new { Product = product, Flags = GetProductAuditFlags(product) })
+                .Where(item => item.Flags.Any())
+                .OrderBy(item => item.Product.Name)
+                .ToList();
+
+            string syncedAt = NowString();
+            var rows = products.Select(item => (IReadOnlyList<object>)new List<object>
+            {
+                item.Product.Sku ?? string.Empty,
+                item.Product.Name ?? string.Empty,
+                item.Product.Stock ?? 0,
+                item.Product.Unit ?? "Pcs",
+                item.Product.PurchasePrice ?? 0,
+                item.Product.SellingPrice ?? 0,
+                item.Product.Category ?? string.Empty,
+                string.Join("|", item.Flags),
+                syncedAt
+            }).ToList();
+
+            await _googleSheetsService.ReplaceSheetRowsAsync("Produk_Audit", ProductAuditHeaders, rows);
         }
 
         public async Task SyncDailySalesAsync(DateTime startDate, DateTime endDate)
@@ -215,7 +244,7 @@ namespace SmartSembakoAssistant.Services
                     ["Profit"] = profit,
                     ["Jumlah Transaksi"] = transactionCount,
                     ["Items Sold"] = itemsSold,
-                    ["Margin %"] = omzet > 0 ? Math.Round(profit / omzet * 100, 2) : 0,
+                    ["Margin %"] = omzet > 0 ? Math.Round(profit / omzet, 4) : 0,
                     ["SyncedAt"] = NowString()
                 });
             }
@@ -277,10 +306,10 @@ namespace SmartSembakoAssistant.Services
         private static string GetStockStatus(decimal? stock)
         {
             decimal value = stock.GetValueOrDefault();
-            if (value < 0) return "Minus";
-            if (value == 0) return "Habis";
-            if (value <= 10) return "Rendah";
-            return "Aman";
+            if (value < 0) return "MINUS";
+            if (value == 0) return "HABIS";
+            if (value <= 10) return "RENDAH";
+            return "AMAN";
         }
 
         private static string GetStockRecommendation(decimal? stock)
@@ -295,10 +324,28 @@ namespace SmartSembakoAssistant.Services
         {
             if (receivable.OldestDueDate.HasValue && receivable.OldestDueDate.Value.Date < DateTime.Today)
             {
-                return "Overdue";
+                return "OVERDUE";
             }
 
-            return "Open";
+            if (receivable.OldestDueDate.HasValue && receivable.OldestDueDate.Value.Date <= DateTime.Today.AddDays(7))
+            {
+                return "DUE_SOON";
+            }
+
+            return "OK";
+        }
+
+        private static List<string> GetProductAuditFlags(Product product)
+        {
+            var flags = new List<string>();
+            if (product.Stock.GetValueOrDefault() < 0) flags.Add("STOK_MINUS");
+            if (product.Stock.GetValueOrDefault() == 0) flags.Add("STOK_0");
+            if (product.PurchasePrice.GetValueOrDefault() == 0) flags.Add("COST_0");
+            if (product.PurchasePrice.GetValueOrDefault() < 0) flags.Add("COST_MINUS");
+            if (product.SellingPrice.GetValueOrDefault() == 0) flags.Add("HARGA_JUAL_0");
+            if (product.SellingPrice.GetValueOrDefault() < 0) flags.Add("HARGA_JUAL_MINUS");
+            if (string.IsNullOrWhiteSpace(product.Category)) flags.Add("KATEGORI_KOSONG");
+            return flags;
         }
     }
 }

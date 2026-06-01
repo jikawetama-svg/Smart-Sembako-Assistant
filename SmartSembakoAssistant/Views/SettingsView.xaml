@@ -601,6 +601,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="Import mode" VerticalAlignment="Center" FontSize="11" Margin="0,0,8,0" Foreground="#374151"/>
@@ -612,6 +613,7 @@
                         <Button x:Name="BtnExportMappingPackage" Grid.Column="2" Content="Export Package" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnExportMappingPackage_Click"/>
                         <Button x:Name="BtnImportMappingPackage" Grid.Column="3" Content="Import Preview" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnImportMappingPackage_Click"/>
                         <Button x:Name="BtnApplyMappingImport" Grid.Column="4" Content="Apply Non-Conflicts" Style="{StaticResource SaveButtonStyle}" Padding="10,6" FontSize="11" Click="BtnApplyMappingImport_Click"/>
+                        <Button x:Name="BtnClearMappingPreview" Grid.Column="5" Content="Clear Preview" Style="{StaticResource SmallButtonStyle}" Click="BtnClearMappingPreview_Click"/>
                     </Grid>
 
                     <DataGrid x:Name="DgMappingImportPreview"
@@ -660,6 +662,11 @@
 
                     <TextBlock Text="Nama Sheet Tab Pembelian" FontSize="11" Margin="0,8,0,5" Foreground="#374151"/>
                     <TextBox x:Name="TxtSheetsPurchaseTabName" Style="{StaticResource InputStyle}" Margin="0,0,0,10"/>
+
+                    <CheckBox x:Name="ChkSheetsEnableFormatting" Content="Aktifkan formatting otomatis" Margin="0,0,0,6"/>
+                    <CheckBox x:Name="ChkSheetsEnableConditionalFormatting" Content="Aktifkan conditional formatting audit" Margin="0,0,0,6"/>
+                    <CheckBox x:Name="ChkSheetsEnableCharts" Content="Aktifkan chart otomatis" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource HelpTextStyle}" Text="Chart menambah request API Google. Matikan jika spreadsheet produksi sudah berat atau ingin prepare struktur saja."/>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="BtnPrepareSheets" Content="Prepare Sheets" Style="{StaticResource SmallButtonStyle}" Margin="0,0,6,0" Click="BtnPrepareSheets_Click"/>

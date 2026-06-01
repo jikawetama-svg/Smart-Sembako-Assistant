@@ -111,7 +111,10 @@
     "TransaksiSheetName": "Transaksi",
     "AnalitikSheetName": "Analitik",
     "LogSheetName": "Log",
-    "PurchaseSheetName": "Pembelian"
+    "PurchaseSheetName": "Pembelian",
+    "EnableFormatting": true,
+    "EnableCharts": false,
+    "EnableConditionalFormatting": true
   },
   "OcrReceipt": {
     "Enabled": false,

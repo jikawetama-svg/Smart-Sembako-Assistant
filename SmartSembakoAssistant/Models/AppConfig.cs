@@ -195,6 +195,9 @@ namespace SmartSembakoAssistant.Models
         public string? LogSheetName { get; set; } = "Log";
         /// <summary>Nama tab sheet untuk data pembelian dari OCR struk.</summary>
         public string? PurchaseSheetName { get; set; } = "Pembelian";
+        public bool EnableFormatting { get; set; } = true;
+        public bool EnableCharts { get; set; } = false;
+        public bool EnableConditionalFormatting { get; set; } = true;
     }
 
     /// <summary>Konfigurasi fitur OCR struk pembelian via Telegram.</summary>
