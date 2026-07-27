@@ -16,6 +16,7 @@ namespace SmartSembakoAssistant.Views
         private readonly LoggingService _loggingService;
         private readonly PosDbService? _posDbService;
         private readonly BotController? _botController;
+        private readonly SyncService? _syncService;
         private DispatcherTimer? _autoRefreshTimer;
 
         public DashboardView(
@@ -23,7 +24,8 @@ namespace SmartSembakoAssistant.Views
             DatabaseService databaseService,
             LoggingService loggingService,
             PosDbService? posDbService,
-            BotController? botController)
+            BotController? botController,
+            SyncService? syncService = null)
         {
             InitializeComponent();
 
@@ -32,8 +34,9 @@ namespace SmartSembakoAssistant.Views
             _loggingService = loggingService;
             _posDbService = posDbService;
             _botController = botController;
+            _syncService = syncService;
 
-            LoadDashboardData();
+            _ = LoadDashboardDataAsync();
             SetupAutoRefresh();
         }
 
@@ -71,7 +74,7 @@ namespace SmartSembakoAssistant.Views
             }
         }
 
-        private async void LoadDashboardData()
+        private async Task LoadDashboardDataAsync()
         {
             try
             {
@@ -103,7 +106,7 @@ namespace SmartSembakoAssistant.Views
                     try
                     {
                         // Test API call untuk verify connection
-                        var groqService = new GroqService(_configService, _loggingService);
+                        using var groqService = new GroqService(_configService, _loggingService);
                         var (success, message) = await groqService.TestGroqConnectionAsync();
                         
                         if (success)
@@ -215,11 +218,13 @@ namespace SmartSembakoAssistant.Views
         /// </summary>
         public async Task LoadDataAsync()
         {
-            LoadDashboardData();
+            await LoadDashboardDataAsync();
         }
 
         private void UpdateRuntimeDiagnostics(IntegrationStatus? integration)
         {
+            UpdateCloudSyncStatusUI();
+
             if (integration == null)
             {
                 TxtRuntimeDiagnostics.Text = "Runtime belum aktif atau status belum tersedia.";
@@ -233,6 +238,28 @@ namespace SmartSembakoAssistant.Views
             string ownerWarning = BuildOwnerWarning();
             TxtWhatsAppDiagnostics.Text =
                 $"Pending WA/Baileys: {integration.PendingWhatsAppLikeOutboundCount} | Last ignored: {integration.LastIgnoredInboundReason ?? "-"} | Last outbound guard: {integration.LastFailureMessage ?? "-"}{ownerWarning}";
+        }
+
+        private void UpdateCloudSyncStatusUI()
+        {
+            var supabaseConfig = _configService.Config?.Supabase;
+            if (supabaseConfig == null || !supabaseConfig.Enabled)
+            {
+                TxtCloudSyncStatus.Text = "☁️ Supabase Cloud Sync: Nonaktif (Bisa diaktifkan melalui Config/Settings)";
+                TxtCloudSyncStatus.Foreground = (Brush)new BrushConverter().ConvertFrom("#6B7280")!;
+                return;
+            }
+
+            if (_syncService != null)
+            {
+                string lastTimeStr = _syncService.LastSyncTime.HasValue ? _syncService.LastSyncTime.Value.ToString("dd/MM HH:mm:ss") : "Belum pernah";
+                TxtCloudSyncStatus.Text = $"☁️ Supabase Cloud Sync: {_syncService.LastSyncStatus} | Terakhir: {lastTimeStr} | Synced: {_syncService.LastSyncedCount} produk";
+            }
+            else
+            {
+                TxtCloudSyncStatus.Text = $"☁️ Supabase Cloud Sync: Siap (Interval: {supabaseConfig.SyncIntervalMinutes} menit)";
+            }
+            TxtCloudSyncStatus.Foreground = (Brush)new BrushConverter().ConvertFrom("#2563EB")!;
         }
 
         private string BuildOwnerWarning()
@@ -271,7 +298,7 @@ namespace SmartSembakoAssistant.Views
                     $"Manual clear outbox: {result.TotalCancelled} pending dibatalkan. WhatsApp={result.WhatsAppCancelled}, Baileys={result.BaileysCancelled}.",
                     "OutboundGuard");
                 ToastHelper.ShowSuccess("Outbox", $"{result.TotalCancelled} pending WA/Baileys dibatalkan.", Window.GetWindow(this));
-                LoadDashboardData();
+                await LoadDashboardDataAsync();
             }
             catch (Exception ex)
             {
@@ -281,6 +308,62 @@ namespace SmartSembakoAssistant.Views
             finally
             {
                 BtnClearPendingOutbox.IsEnabled = true;
+            }
+        }
+
+        private async void BtnTriggerCloudSync_Click(object sender, RoutedEventArgs e)
+        {
+            var supabaseConfig = _configService.Config?.Supabase;
+            if (supabaseConfig == null || !supabaseConfig.Enabled)
+            {
+                MessageBox.Show(
+                    "Fitur Supabase Cloud Sync saat ini Nonaktif dalam konfigurasi.\n\nUntuk mengaktifkannya, buka Settings atau set 'Supabase.Enabled = true' pada config.json dengan URL dan API Key Supabase Anda.",
+                    "Cloud Sync Nonaktif",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            if (_posDbService == null)
+            {
+                MessageBox.Show("Database POS Aronium belum terhubung.", "Cloud Sync Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            BtnTriggerCloudSync.IsEnabled = false;
+            TxtCloudSyncStatus.Text = "☁️ Supabase Cloud Sync: Memproses sinkronisasi delta...";
+
+            try
+            {
+                bool result;
+                if (_syncService != null)
+                {
+                    result = await _syncService.SyncDeltaAsync();
+                }
+                else
+                {
+                    using var syncService = new SyncService(_posDbService, _configService, _loggingService);
+                    result = await syncService.SyncDeltaAsync();
+                }
+
+                if (result)
+                {
+                    ToastHelper.ShowSuccess("Cloud Sync", "Sinkronisasi Delta ke Supabase berhasil!", Window.GetWindow(this));
+                }
+                else
+                {
+                    ToastHelper.ShowError("Cloud Sync", "Sinkronisasi Delta gagal. Cek log aplikasi untuk detail.", Window.GetWindow(this));
+                }
+            }
+            catch (Exception ex)
+            {
+                await _loggingService.LogErrorAsync($"Manual Cloud Sync error: {ex.Message}", "Dashboard", ex.ToString());
+                ToastHelper.ShowError("Cloud Sync Error", ex.Message, Window.GetWindow(this));
+            }
+            finally
+            {
+                BtnTriggerCloudSync.IsEnabled = true;
+                UpdateCloudSyncStatusUI();
             }
         }
 

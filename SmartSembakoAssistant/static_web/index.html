@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Sembako Assistant - Static Web Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo-icon">🛒</div>
+                <div class="brand-text">
+                    <h2>Smart Sembako</h2>
+                    <span class="badge-free">Mode Gratis / Lokal</span>
+                </div>
+            </div>
+
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="dashboard">
+                    <span class="icon">📊</span> Dashboard Toko
+                </button>
+                <button class="nav-item" data-tab="inventory">
+                    <span class="icon">📦</span> Stok Produk
+                </button>
+                <button class="nav-item" data-tab="bot-demo">
+                    <span class="icon">💬</span> Simulasi Telegram Bot
+                </button>
+                <button class="nav-item" data-tab="settings">
+                    <span class="icon">⚙️</span> Status & Setup
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="offline-indicator">
+                    <span class="dot"></span> Database Standalone (Lokal)
+                </div>
+                <small>v6.2.0 Static Mode</small>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h1 id="page-title">Dashboard Penjualan & Stok</h1>
+                    <p id="page-subtitle">Pantau aktivitas toko sembako Anda secara langsung tanpa biaya langganan.</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-outline" id="btn-refresh">🔄 Refresh Data</button>
+                    <button class="btn btn-primary" id="btn-sync-demo">⚡ Sync POS Lokal</button>
+                </div>
+            </header>
+
+            <!-- Dashboard Tab -->
+            <section class="tab-content active" id="tab-dashboard">
+                <div class="stats-grid">
+                    <div class="stat-card glass glow-blue">
+                        <div class="stat-header">
+                            <span class="stat-title">Omset Hari Ini</span>
+                            <span class="stat-icon">💰</span>
+                        </div>
+                        <div class="stat-value" id="stat-revenue">Rp 3.480.000</div>
+                        <div class="stat-change positive">▲ +12% dibanding kemarin</div>
+                    </div>
+
+                    <div class="stat-card glass glow-green">
+                        <div class="stat-header">
+                            <span class="stat-title">Total Transaksi</span>
+                            <span class="stat-icon">🧾</span>
+                        </div>
+                        <div class="stat-value" id="stat-transactions">48 Struk</div>
+                        <div class="stat-change neutral">Rata-rata Rp 72.500/struk</div>
+                    </div>
+
+                    <div class="stat-card glass glow-amber">
+                        <div class="stat-header">
+                            <span class="stat-title">Stok Perlu Restock</span>
+                            <span class="stat-icon">⚠️</span>
+                        </div>
+                        <div class="stat-value" id="stat-low-stock">4 Produk</div>
+                        <div class="stat-change warning">Di bawah minimum stok</div>
+                    </div>
+
+                    <div class="stat-card glass glow-purple">
+                        <div class="stat-header">
+                            <span class="stat-title">Status Cloud Service</span>
+                            <span class="stat-icon">⚡</span>
+                        </div>
+                        <div class="stat-value text-sm">Mode Offline Gratis</div>
+                        <div class="stat-change positive">100% Berjalan Lokal</div>
+                    </div>
+                </div>
+
+                <div class="grid-2col">
+                    <div class="card glass">
+                        <div class="card-header">
+                            <h3>📦 Produk Paling Laris (Top Sales)</h3>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Nama Produk</th>
+                                        <th>Harga Jual</th>
+                                        <th>Terjual</th>
+                                        <th>Sisa Stok</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="top-products-list">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card glass">
+                        <div class="card-header">
+                            <h3>⚠️ Peringatan Stok Kritis</h3>
+                        </div>
+                        <div class="alert-list" id="low-stock-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Inventory Tab -->
+            <section class="tab-content" id="tab-inventory">
+                <div class="card glass">
+                    <div class="card-header flex-between">
+                        <div class="search-box">
+                            <input type="text" id="search-inventory" placeholder="🔍 Cari nama produk / barcode...">
+                        </div>
+                        <div class="filter-group">
+                            <button class="btn btn-sm filter-btn active" data-filter="all">Semua</button>
+                            <button class="btn btn-sm filter-btn" data-filter="low">Stok Kritis</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Kode</th>
+                                    <th>Nama Produk</th>
+                                    <th>Kategori</th>
+                                    <th>Harga Jual</th>
+                                    <th>Stok</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inventory-table-body">
+                                <!-- Populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Telegram Bot Simulator Tab -->
+            <section class="tab-content" id="tab-bot-demo">
+                <div class="chat-container glass">
+                    <div class="chat-header">
+                        <div class="bot-avatar">🤖</div>
+                        <div class="bot-info">
+                            <h4>Smart Sembako Bot (Offline AI Mode)</h4>
+                            <span class="status-online">● Online (Mode Deterministik Gratis)</span>
+                        </div>
+                    </div>
+
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="message bot">
+                            <div class="msg-bubble">
+                                Halo! Saya Asisten Smart Sembako Mode Gratis. Silakan pilih atau ketik pertanyaan di bawah:
+                                <div class="quick-replies">
+                                    <button class="chip" onclick="sendQuickReply('Berapa stok minyak goreng?')">📦 Cek Stok Minyak</button>
+                                    <button class="chip" onclick="sendQuickReply('Berapa omset hari ini?')">💰 Omset Hari Ini</button>
+                                    <button class="chip" onclick="sendQuickReply('Barang apa yang perlu restock?')">⚠️ Produk Kritis</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chat-input-area">
+                        <input type="text" id="chat-input" placeholder="Ketik pesan untuk bot (misal: cek stok beras Ramos)...">
+                        <button class="btn btn-primary" id="btn-send-chat">Kirim ➔</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section class="tab-content" id="tab-settings">
+                <div class="card glass">
+                    <h3>⚙️ Panduan Penggunaan Mode Statis / Offline</h3>
+                    <p style="margin-top: 10px; color: var(--text-muted);">
+                        Mode ini dirancang khusus agar aplikasi dapat berjalan 100% gratis tanpa biaya bulanan Supabase atau API Key berbayar.
+                    </p>
+
+                    <div class="settings-grid" style="margin-top: 20px;">
+                        <div class="setting-box glass">
+                            <h4>1. SQLite Database Lokal (`pos.db`)</h4>
+                            <p>Data transaksi dan stok disimpan di PC toko secara offline tanpa memerlukan server cloud.</p>
+                            <span class="badge-status success">Aktif & Terhubung</span>
+                        </div>
+
+                        <div class="setting-box glass">
+                            <h4>2. Local AI Rule Engine</h4>
+                            <p>Bot Telegram dapat menjawab pertanyaan stok & omset menggunakan aturan deterministik gratis bawaan.</p>
+                            <span class="badge-status success">Aktif & Gratis</span>
+                        </div>
+
+                        <div class="setting-box glass">
+                            <h4>3. Ekspor Laporan Excel / CSV</h4>
+                            <p>Anda tetap dapat mengekspor rekap penjualan harian dan bulanan ke format Excel.</p>
+                            <span class="badge-status success">Tersedia</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

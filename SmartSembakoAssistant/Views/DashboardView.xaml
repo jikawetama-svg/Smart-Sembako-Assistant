@@ -191,7 +191,7 @@
             </Border>
         </Grid>
 
-        <!-- WhatsApp Runtime Diagnostics -->
+        <!-- WhatsApp Runtime Diagnostics & Cloud Sync -->
         <Border Grid.Row="3" Background="White" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -200,12 +200,14 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0">
-                    <TextBlock Text="WhatsApp Runtime Diagnostics" FontSize="14" FontWeight="SemiBold" Foreground="#111827" Margin="0,0,0,8"/>
+                    <TextBlock Text="WhatsApp &amp; Cloud Delta Sync Diagnostics" FontSize="14" FontWeight="SemiBold" Foreground="#111827" Margin="0,0,0,8"/>
                     <TextBlock x:Name="TxtRuntimeDiagnostics" Text="Runtime belum aktif." FontSize="11" Foreground="#374151" TextWrapping="Wrap" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="TxtWhatsAppDiagnostics" Text="Outbox dan guard belum dibaca." FontSize="11" Foreground="#6B7280" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="TxtWhatsAppDiagnostics" Text="Outbox dan guard belum dibaca." FontSize="11" Foreground="#6B7280" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtCloudSyncStatus" Text="☁️ Supabase Cloud Sync: Belum Diinisialisasi" FontSize="11" Foreground="#2563EB" FontWeight="SemiBold" TextWrapping="Wrap"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <Button x:Name="BtnTriggerCloudSync" Content="☁️ Sync Delta Cloud" Style="{StaticResource ActionButtonStyle}" Click="BtnTriggerCloudSync_Click"/>
                     <Button x:Name="BtnClearPendingOutbox" Content="Clear Pending WA Outbox" Style="{StaticResource ActionButtonStyle}" Click="BtnClearPendingOutbox_Click"/>
                 </StackPanel>
             </Grid>

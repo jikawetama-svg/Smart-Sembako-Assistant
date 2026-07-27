@@ -21,6 +21,9 @@ namespace SmartSembakoAssistant.Services
         public string OcrMappingsPath => _ocrMappingsPath;
         public IReadOnlyList<string> DetectedConfigPaths { get; private set; } = Array.Empty<string>();
         public string? DuplicateConfigWarning { get; private set; }
+        public bool IsConfigCorrupted { get; private set; }
+        public string? LastLoadError { get; private set; }
+        public string? BackupCorruptConfigPath { get; private set; }
 
         public ConfigService(string configPath = "config.json", LoggingService? loggingService = null)
         {
@@ -33,6 +36,10 @@ namespace SmartSembakoAssistant.Services
 
         private void LoadConfig()
         {
+            IsConfigCorrupted = false;
+            LastLoadError = null;
+            BackupCorruptConfigPath = null;
+
             try
             {
                 if (!File.Exists(_configPath))
@@ -53,7 +60,13 @@ namespace SmartSembakoAssistant.Services
 
                 string json = File.ReadAllText(_configPath);
                 List<OcrProductMapping> legacyOcrMappings = ExtractLegacyOcrMappings(json);
-                _config = JsonConvert.DeserializeObject<AppConfig>(json);
+                AppConfig? deserializedConfig = JsonConvert.DeserializeObject<AppConfig>(json);
+                if (deserializedConfig == null)
+                {
+                    throw new InvalidDataException("Gagal melakukan deserialisasi konfigurasi JSON.");
+                }
+
+                _config = deserializedConfig;
 
                 // Decrypt API keys saat load
                 if (_config?.Groq != null && !string.IsNullOrEmpty(_config.Groq.ApiKey))
@@ -80,12 +93,48 @@ namespace SmartSembakoAssistant.Services
             }
             catch (Exception ex)
             {
+                IsConfigCorrupted = true;
+                LastLoadError = ex.Message;
                 if (_loggingService != null)
                 {
                     _loggingService.LogErrorAsync($"Error loading config: {ex.Message}", "Config", ex.ToString());
                 }
-                _config = new AppConfig();
-                SaveConfig();
+
+                // K-1: Safely backup corrupted config file instead of overwriting it with empty default config
+                try
+                {
+                    if (File.Exists(_configPath))
+                    {
+                        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                        string directory = Path.GetDirectoryName(_configPath) ?? string.Empty;
+                        string backupPath = Path.Combine(directory, $"config.invalid-{timestamp}.json");
+                        File.Copy(_configPath, backupPath, overwrite: true);
+                        BackupCorruptConfigPath = backupPath;
+                    }
+                }
+                catch
+                {
+                    // Best effort backup ignore
+                }
+
+                // Load fallback config from template or default in-memory object without overwriting the corrupted file
+                string templatePath = ResolveTemplatePath();
+                if (File.Exists(templatePath))
+                {
+                    try
+                    {
+                        string templateJson = File.ReadAllText(templatePath);
+                        _config = JsonConvert.DeserializeObject<AppConfig>(templateJson) ?? new AppConfig();
+                    }
+                    catch
+                    {
+                        _config = new AppConfig();
+                    }
+                }
+                else
+                {
+                    _config = new AppConfig();
+                }
             }
         }
 

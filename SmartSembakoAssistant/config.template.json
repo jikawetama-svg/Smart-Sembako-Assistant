@@ -116,6 +116,13 @@
     "EnableCharts": false,
     "EnableConditionalFormatting": true
   },
+  "Supabase": {
+    "Enabled": true,
+    "Url": "https://your-project.supabase.co",
+    "ApiKey": "YOUR_SUPABASE_SERVICE_ROLE_KEY",
+    "JwtToken": "",
+    "SyncIntervalMinutes": 15
+  },
   "OcrReceipt": {
     "Enabled": false,
     "TessdataPath": "tessdata",

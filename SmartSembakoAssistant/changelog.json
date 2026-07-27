@@ -4,6 +4,24 @@
     "timezone": "UTC+07:00",
     "entries": [
         {
+            "date": "2026-07-28",
+            "version": "6.2.1",
+            "title": "Render Cloud Deployment Stabilization, Dynamic Port Binding & Dual-Runtime Proxying",
+            "summary": [
+                "RENDER CLOUD BOT DEPLOYMENT: Stabilisasi deployment Python Cloud Bot (bot_runtime) ke Render Web Services.",
+                "DYNAMIC PORT BINDING: Dockerfile diperbarui dengan CMD dynamic port (${PORT:-10000}) untuk membaca environment variable PORT secara dinamis dari Render.",
+                "ROOT HEALTH CHECK: Penambahan handler @app.get('/') dan @app.head('/') di main.py agar Render Health Check menerima HTTP 200 OK instan.",
+                "TELEGRAM WEBHOOK VERIFICATION: Webhook Telegram dikonfigurasi dan diverifikasi ke https://smart-sembako-backend.onrender.com/webhook/telegram dengan HMAC secret token.",
+                "DUAL-RUNTIME SYNC ARCHITECTURE: Verifikasi arsitektur data Offline-First C# Desktop -> Supabase Cloud (UPSERT) dan Read-Only Consumer Telegram Bot (SELECT), menjamin zero data conflict."
+            ],
+            "details": [
+                "File impact utama: bot_runtime/Dockerfile, bot_runtime/main.py, bot_runtime/README.md, bot_runtime/.env, bot_runtime/.env.example, GUIDE_SETUP_DEPLOYMENT.md, DEPLOYMENT_RENDER_SUMMARY.md.",
+                "GitHub repository sync: Commits di-push ke https://github.com/jikawetama-svg/smart-sembako-backend.git (branch main).",
+                "Verification: dotnet build SmartSembakoAssistant.sln sukses dengan 0 errors (Time elapsed 57.90s)."
+            ],
+            "status": "released"
+        },
+        {
             "date": "2026-05-25",
             "version": "5.0.2",
             "title": "Release Automation, Version Sync, and Build Safety",

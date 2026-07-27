@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -7,9 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>SmartSembakoAssistant</AssemblyName>
-    <Version>5.0.2</Version>
-    <AssemblyVersion>5.0.2.0</AssemblyVersion>
-    <FileVersion>5.0.2.0</FileVersion>
+    <Version>5.1.0</Version>
+    <AssemblyVersion>5.1.0.0</AssemblyVersion>
+    <FileVersion>5.1.0.0</FileVersion>
     <Product>Smart Sembako Assistant</Product>
     <Company>SA TECH.Inc</Company>
     <Copyright>Copyright (c) 2026 SA TECH.Inc</Copyright>
@@ -67,9 +67,12 @@
     <None Remove="config.json" />
     <None Remove="data\**\*" />
     <None Remove="Tempt\**\*" />
+    <None Remove="SmartSembakoAssistant.Tests\**\*" />
+    <Compile Remove="SmartSembakoAssistant.Tests\**\*" />
     <Content Remove="config.json" />
     <Content Remove="data\**\*" />
     <Content Remove="Tempt\**\*" />
+    <Content Remove="SmartSembakoAssistant.Tests\**\*" />
   </ItemGroup>
 
 </Project>

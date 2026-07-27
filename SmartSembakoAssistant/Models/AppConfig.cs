@@ -12,6 +12,7 @@ namespace SmartSembakoAssistant.Models
         public AutomationSettings? Automation { get; set; }
         public PosDbSettings? PosDb { get; set; }
         public GoogleSheetsSettings? GoogleSheets { get; set; }
+        public SupabaseSettings? Supabase { get; set; }
         public OcrReceiptSettings? OcrReceipt { get; set; }
         public MappingPolicySettings? MappingPolicy { get; set; }
         public MemorySettings? Memory { get; set; }
@@ -198,6 +199,15 @@ namespace SmartSembakoAssistant.Models
         public bool EnableFormatting { get; set; } = true;
         public bool EnableCharts { get; set; } = false;
         public bool EnableConditionalFormatting { get; set; } = true;
+    }
+
+    public class SupabaseSettings
+    {
+        public bool Enabled { get; set; } = false;
+        public string? Url { get; set; } = "https://your-project.supabase.co";
+        public string? ApiKey { get; set; } = "YOUR_SUPABASE_ANON_OR_SERVICE_ROLE_KEY";
+        public string? JwtToken { get; set; }
+        public int SyncIntervalMinutes { get; set; } = 15;
     }
 
     /// <summary>Konfigurasi fitur OCR struk pembelian via Telegram.</summary>
