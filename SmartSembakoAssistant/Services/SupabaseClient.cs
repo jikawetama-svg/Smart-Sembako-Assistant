@@ -203,6 +203,27 @@ namespace SmartSembakoAssistant.Services
             catch (Exception ex) { return (false, ex.Message); }
         }
 
+        public async Task<(bool success, int count, string? error)> UpsertCustomersAsync(List<CustomerSyncDTO> customers)
+        {
+            if (customers == null || customers.Count == 0) return (true, 0, null);
+            if (_settings == null || !_settings.Enabled) return (false, 0, "Supabase tidak aktif.");
+
+            try
+            {
+                string json = JsonConvert.SerializeObject(customers);
+                using var request = new HttpRequestMessage(HttpMethod.Post, "customers_sync")
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                var response = await _httpClient.SendAsync(request);
+                return response.IsSuccessStatusCode
+                    ? (true, customers.Count, null)
+                    : (false, 0, await response.Content.ReadAsStringAsync());
+            }
+            catch (Exception ex) { return (false, 0, ex.Message); }
+        }
+
         public async Task<(bool success, string? error)> UpdateSyncMetadataAsync(string key, string value)
         {
             if (_settings == null || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.Url))

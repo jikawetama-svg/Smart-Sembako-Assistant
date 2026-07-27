@@ -116,4 +116,28 @@ namespace SmartSembakoAssistant.Models
         [JsonProperty("synced_at")]
         public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
     }
+
+    /// <summary>
+    /// Data Transfer Object untuk sinkronisasi ringkas pelanggan & piutang ke Cloud.
+    /// </summary>
+    public class CustomerSyncDTO
+    {
+        [JsonProperty("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonProperty("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonProperty("phone")]
+        public string? Phone { get; set; }
+
+        [JsonProperty("total_debt")]
+        public decimal TotalDebt { get; set; }
+
+        [JsonProperty("last_transaction_date")]
+        public DateTime? LastTransactionDate { get; set; }
+
+        [JsonProperty("synced_at")]
+        public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
+    }
 }
