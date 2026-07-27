@@ -6,10 +6,12 @@
 
 ## 🌟 Fitur Utama
 
-- ⚡ **Offline-First & Cloud Sync**: Data transaksi dan stok dari kasir lokal Aronium POS disinkronisasikan secara otomatis (*one-way push*) ke Supabase Cloud.
-- 🤖 **Multi-Channel AI Bot**: Terhubung ke Telegram dan WhatsApp untuk menjawab kueri stok, laporan omset, dan analisis penjualan secara real-time via LLM (Groq Llama 3.3 70B & Gemini 2.5 Flash).
+- ⚡ **Offline-First & Cloud Sync**: Data transaksi, stok, riwayat restock, dan koreksi inventory dari kasir lokal Aronium POS disinkronisasikan secara otomatis (*one-way push*) ke Supabase Cloud.
+- 🧠 **Persistent AI Memory**: Memori percakapan berlanjut (sliding-window 12 pesan per user) tersimpan di Supabase Cloud (`conversations_memory`) untuk menjaga konteks percakapan di semua instance bot.
+- 🔄 **Automated Webhook Failover**: Transisi otomatis 100% tanpa henti. Saat Desktop Bot (C#) aktif, Cloud Bot mencopot webhook untuk mengizinkan Long Polling. Saat Desktop Bot mati/tutup, Cloud Bot mengambil alih via Webhook Render secara instan.
+- 🤖 **Multi-Channel AI Bot (100% Parity)**: Terhubung ke Telegram dan WhatsApp untuk menjawab kueri stok, laporan omset, riwayat restock, koreksi inventory, dan expired alert secara real-time via LLM (Groq Llama 3.3 70B & Gemini 2.5 Flash).
 - 📦 **Quick Inventory & Restock Engine**: Koreksi stok fisik (`/inventory`) dan penambahan stok pembelian (`/restock`) langsung via chat Telegram/WhatsApp dengan pembuatan dokumen otomatis di Aronium POS.
-- 🧾 **OCR Faktur Pembelian**: Pindai foto struk/faktur supplier (`/struk`) untuk auto-input pembelian produk ke sistem.
+- 🧾 **OCR Faktur Pembelian**: Pindai foto struk/faktur supplier (`/struk`) untuk auto-input pembelian produk ke sistem (Desktop).
 - 💬 **WhatsApp Dual Transport**: Mendukung WhatsApp Cloud API resmi Meta dan WhatsApp Baileys sidecar lokal tanpa biaya API.
 
 ---

@@ -161,6 +161,48 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
+        public async Task<(bool success, string? error)> UpsertRestockSyncAsync(List<RestockSyncDTO> items)
+        {
+            if (items == null || items.Count == 0) return (true, null);
+            if (_settings == null || !_settings.Enabled) return (false, "Supabase tidak aktif.");
+
+            try
+            {
+                string json = JsonConvert.SerializeObject(items);
+                using var request = new HttpRequestMessage(HttpMethod.Post, "restock_sync")
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                var response = await _httpClient.SendAsync(request);
+                return response.IsSuccessStatusCode
+                    ? (true, null)
+                    : (false, await response.Content.ReadAsStringAsync());
+            }
+            catch (Exception ex) { return (false, ex.Message); }
+        }
+
+        public async Task<(bool success, string? error)> UpsertInventorySyncAsync(List<InventorySyncDTO> items)
+        {
+            if (items == null || items.Count == 0) return (true, null);
+            if (_settings == null || !_settings.Enabled) return (false, "Supabase tidak aktif.");
+
+            try
+            {
+                string json = JsonConvert.SerializeObject(items);
+                using var request = new HttpRequestMessage(HttpMethod.Post, "inventory_sync")
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                var response = await _httpClient.SendAsync(request);
+                return response.IsSuccessStatusCode
+                    ? (true, null)
+                    : (false, await response.Content.ReadAsStringAsync());
+            }
+            catch (Exception ex) { return (false, ex.Message); }
+        }
+
         public async Task<(bool success, string? error)> UpdateSyncMetadataAsync(string key, string value)
         {
             if (_settings == null || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.Url))

@@ -62,4 +62,58 @@ namespace SmartSembakoAssistant.Models
         [JsonProperty("synced_at")]
         public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
     }
+
+    /// <summary>
+    /// Data Transfer Object untuk sinkronisasi riwayat restock ke Cloud.
+    /// </summary>
+    public class RestockSyncDTO
+    {
+        [JsonProperty("product_name")]
+        public string ProductName { get; set; } = string.Empty;
+
+        [JsonProperty("quantity")]
+        public decimal Quantity { get; set; }
+
+        [JsonProperty("unit")]
+        public string Unit { get; set; } = "pcs";
+
+        [JsonProperty("supplier_name")]
+        public string? SupplierName { get; set; }
+
+        [JsonProperty("purchase_price")]
+        public decimal PurchasePrice { get; set; }
+
+        [JsonProperty("restock_date")]
+        public string? RestockDate { get; set; }
+
+        [JsonProperty("synced_at")]
+        public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Data Transfer Object untuk sinkronisasi riwayat koreksi stok ke Cloud.
+    /// </summary>
+    public class InventorySyncDTO
+    {
+        [JsonProperty("product_name")]
+        public string ProductName { get; set; } = string.Empty;
+
+        [JsonProperty("quantity_before")]
+        public decimal QuantityBefore { get; set; }
+
+        [JsonProperty("quantity_after")]
+        public decimal QuantityAfter { get; set; }
+
+        [JsonProperty("delta")]
+        public decimal Delta { get; set; }
+
+        [JsonProperty("reason")]
+        public string? Reason { get; set; }
+
+        [JsonProperty("corrected_at")]
+        public string? CorrectedAt { get; set; }
+
+        [JsonProperty("synced_at")]
+        public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
+    }
 }

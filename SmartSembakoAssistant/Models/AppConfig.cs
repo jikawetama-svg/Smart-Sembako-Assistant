@@ -41,6 +41,7 @@ namespace SmartSembakoAssistant.Models
         public List<long>? KasirChatIds { get; set; } // Chat ID Kasir (restricted access)
         public int RateLimitSeconds { get; set; } = 5;
         public bool EnableVoiceNotes { get; set; } = false;
+        public string? SecretToken { get; set; } = "smart-sembako-secret-token";
     }
 
     public class WhatsAppSettings
@@ -313,6 +314,8 @@ namespace SmartSembakoAssistant.Models
         public string? MachineName { get; set; }
         public bool IsActiveBotRuntime { get; set; } = true;
         public DateTime? ActiveRuntimeSince { get; set; }
+        /// <summary>URL publik Cloud Bot (Render). Digunakan untuk mengirim sinyal failover.</summary>
+        public string? CloudBotUrl { get; set; } = "https://smart-sembako-backend.onrender.com";
     }
 
     public class AppSetupState

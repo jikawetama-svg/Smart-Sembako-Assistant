@@ -5,6 +5,24 @@
     "entries": [
         {
             "date": "2026-07-28",
+            "version": "7.0.0",
+            "title": "Cloud Bot Feature Parity, AI Memory Integration & Automated Failover Engine",
+            "summary": [
+                "100% BOT FEATURE PARITY: Menyelaraskan seluruh kemampuan Smart Sembako Cloud Bot (Render) dengan Desktop Bot (C#).",
+                "PERSISTENT AI MEMORY: Integrasi Supabase table conversations_memory dengan sliding-window 12 pesan per user untuk ingatan jangka panjang percakapan.",
+                "AUTOMATED FAILOVER ENGINE: Mekanisme auto-swap webhook. Desktop Bot aktif -> kirim sinyal /internal/desktop-online untuk hapus webhook (Long Polling mode). Desktop Bot mati -> kirim sinyal /internal/desktop-offline untuk daftarkan ulang Webhook ke Render Cloud.",
+                "EXPANDED CLOUD TOOLS: Penambahan restock_tools.py (riwayat restock, koreksi inventory, alert expired, rekomendasi restock) untuk Cloud Bot.",
+                "SUPABASE SCHEMA EXPANSION: Tabel baru conversations_memory, restock_sync, dan inventory_sync lengkap dengan indeks dan RLS policy.",
+                "SYNC ENGINE EXPANSION: C# SupabaseClient diperbarui dengan method UpsertRestockSyncAsync dan UpsertInventorySyncAsync."
+            ],
+            "details": [
+                "File impact utama: bot_runtime/agents/master_agent.py, bot_runtime/main.py, bot_runtime/memory/conversation_store.py, bot_runtime/tools/restock_tools.py, bot_runtime/webhook_manager.py, bot_runtime/telegram/rbac.py, Services/TelegramBotService.cs, Services/SupabaseClient.cs, Models/AppConfig.cs, Models/ProductSyncDTO.cs, data/supabase_schema.sql.",
+                "Build status: dotnet build SmartSembakoAssistant.sln sukses dengan 0 Errors."
+            ],
+            "status": "released"
+        },
+        {
+            "date": "2026-07-28",
             "version": "6.2.1",
             "title": "Render Cloud Deployment Stabilization, Dynamic Port Binding & Dual-Runtime Proxying",
             "summary": [

@@ -52,6 +52,45 @@ CREATE TABLE IF NOT EXISTS public.sync_metadata (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 5. Tabel AI Memory (Conversational Memory per Telegram User)
+CREATE TABLE IF NOT EXISTS public.conversations_memory (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         BIGINT NOT NULL,
+    role            TEXT NOT NULL, -- 'user' | 'assistant' | 'system'
+    content         TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_memory_user ON public.conversations_memory (user_id, created_at DESC);
+
+-- 6. Tabel Sync Riwayat Restock / Pembelian Barang
+CREATE TABLE IF NOT EXISTS public.restock_sync (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_name    TEXT NOT NULL,
+    quantity        NUMERIC NOT NULL DEFAULT 0,
+    unit            TEXT DEFAULT 'pcs',
+    supplier_name   TEXT,
+    purchase_price  NUMERIC DEFAULT 0,
+    restock_date    TIMESTAMPTZ DEFAULT NOW(),
+    synced_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_restock_sync_product ON public.restock_sync (product_name);
+
+-- 7. Tabel Sync Riwayat Koreksi Inventory
+CREATE TABLE IF NOT EXISTS public.inventory_sync (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_name    TEXT NOT NULL,
+    quantity_before NUMERIC DEFAULT 0,
+    quantity_after  NUMERIC DEFAULT 0,
+    delta           NUMERIC DEFAULT 0,
+    reason          TEXT,
+    corrected_at    TIMESTAMPTZ DEFAULT NOW(),
+    synced_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_sync_product ON public.inventory_sync (product_name);
+
 -- =================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- =================================================================
@@ -99,3 +138,12 @@ CREATE POLICY "service_role_full_access_metadata" ON public.sync_metadata
 DROP POLICY IF EXISTS "bot_read_metadata" ON public.sync_metadata;
 CREATE POLICY "bot_read_metadata" ON public.sync_metadata
     FOR SELECT USING (TRUE);
+
+-- Policy conversations_memory, restock_sync, inventory_sync:
+ALTER TABLE public.conversations_memory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restock_sync ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_sync ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "full_access_conversations_memory" ON public.conversations_memory FOR ALL USING (TRUE);
+CREATE POLICY "full_access_restock_sync" ON public.restock_sync FOR ALL USING (TRUE);
+CREATE POLICY "full_access_inventory_sync" ON public.inventory_sync FOR ALL USING (TRUE);

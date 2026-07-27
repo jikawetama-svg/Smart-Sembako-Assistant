@@ -24,6 +24,7 @@ namespace SmartSembakoAssistant.Services
         private Mutex? _singleInstanceMutex;
         private bool _ownsSingleInstanceMutex;
         private DateTime? _lastPollingConflictLoggedAt;
+        private static readonly HttpClient _cloudNotifyClient = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
 
         public bool IsRunning { get; private set; }
         public string? LastError { get; private set; }
@@ -91,6 +92,10 @@ namespace SmartSembakoAssistant.Services
                 LastError = null;
                 LastValidatedAt = DateTime.Now;
                 await _loggingService.LogInfoAsync($"Telegram bot aktif: @{me.Username}", "Telegram");
+
+                // Notifikasi ke Cloud Bot agar nonaktifkan webhook (Desktop takeover)
+                _ = NotifyCloudBotAsync("desktop-online");
+
                 return true;
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 404)
@@ -156,10 +161,46 @@ namespace SmartSembakoAssistant.Services
                 IsRunning = false;
                 ReleaseSingleInstanceMutex();
                 await _loggingService.LogInfoAsync("Telegram bot dihentikan.", "Telegram");
+
+                // Notifikasi ke Cloud Bot agar aktifkan kembali webhook (failover)
+                _ = NotifyCloudBotAsync("desktop-offline");
             }
             finally
             {
                 _lifecycleLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Kirim sinyal ke Cloud Bot (Render) untuk mengatur mode polling/webhook.
+        /// desktop-online = Desktop aktif → Cloud Bot hapus webhook.
+        /// desktop-offline = Desktop mati → Cloud Bot daftar webhook kembali.
+        /// </summary>
+        private async Task NotifyCloudBotAsync(string endpoint)
+        {
+            try
+            {
+                string? cloudBotUrl = _configService.Config?.App?.CloudBotUrl;
+                string? secretToken = _configService.Config?.Telegram?.SecretToken
+                    ?? "smart-sembako-secret-token";
+
+                if (string.IsNullOrWhiteSpace(cloudBotUrl))
+                    return; // Cloud Bot URL belum dikonfigurasi, skip
+
+                string url = $"{cloudBotUrl.TrimEnd('/')}/internal/{endpoint}";
+                using var req = new HttpRequestMessage(HttpMethod.Post, url);
+                req.Headers.Add("X-Desktop-Secret", secretToken);
+                req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+                var resp = await _cloudNotifyClient.SendAsync(req);
+                await _loggingService.LogInfoAsync(
+                    $"Cloud Bot notified [{endpoint}]: HTTP {(int)resp.StatusCode}", "Failover");
+            }
+            catch (Exception ex)
+            {
+                // Non-critical: jika Cloud Bot tidak reachable, abaikan
+                await _loggingService.LogWarningAsync(
+                    $"Gagal notifikasi Cloud Bot [{endpoint}]: {ex.Message}", "Failover");
             }
         }
 
