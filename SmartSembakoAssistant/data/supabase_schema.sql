@@ -91,6 +91,21 @@ CREATE TABLE IF NOT EXISTS public.inventory_sync (
 
 CREATE INDEX IF NOT EXISTS idx_inventory_sync_product ON public.inventory_sync (product_name);
 
+-- 8. Tabel Store Brain (Business Memory per Store ID & User ID)
+CREATE TABLE IF NOT EXISTS public.store_brain (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    store_id        TEXT NOT NULL DEFAULT 'store_main',
+    user_id         BIGINT NOT NULL DEFAULT 0,
+    user_role       TEXT NOT NULL DEFAULT 'owner', -- 'owner' | 'admin' | 'kasir'
+    category        TEXT NOT NULL DEFAULT 'preference', -- 'preference' | 'supplier' | 'pattern'
+    key             TEXT NOT NULL,
+    value           JSONB,
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_store_brain_key UNIQUE (store_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_store_brain_store ON public.store_brain (store_id, user_id);
+
 -- =================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- =================================================================
@@ -100,6 +115,10 @@ ALTER TABLE public.products_sync ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.transactions_summary ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.alerts_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sync_metadata ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversations_memory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restock_sync ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_sync ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.store_brain ENABLE ROW LEVEL SECURITY;
 
 -- Policy products_sync:
 -- Service role (C# Desktop Sync Engine) memiliki akses FULL (ALL)
