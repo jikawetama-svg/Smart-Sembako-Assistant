@@ -87,6 +87,10 @@ namespace SmartSembakoAssistant.Services
                     _config.WhatsApp.AppSecret = DecryptValue(_config.WhatsApp.AppSecret);
                     _config.WhatsApp.VerifyToken = DecryptValue(_config.WhatsApp.VerifyToken);
                 }
+                if (_config?.Supabase != null)
+                {
+                    _config.Supabase.ApiKey = DecryptValue(_config.Supabase.ApiKey);
+                }
 
                 LoadOcrMappingsIntoConfig(legacyOcrMappings);
                 EnsureAppIdentity(saveIfChanged: true);
@@ -266,6 +270,14 @@ namespace SmartSembakoAssistant.Services
                         DailySummaryTime = _config.Notifications.DailySummaryTime,
 #pragma warning restore CS0618
                         CheckIntervalMinutes = _config.Notifications.CheckIntervalMinutes
+                    } : null,
+                    Supabase = _config?.Supabase != null ? new SupabaseSettings
+                    {
+                        Enabled = _config.Supabase.Enabled,
+                        Url = _config.Supabase.Url,
+                        ApiKey = EncryptValue(_config.Supabase.ApiKey),
+                        JwtToken = _config.Supabase.JwtToken,
+                        SyncIntervalMinutes = _config.Supabase.SyncIntervalMinutes
                     } : null,
                     App = _config?.App,
                     Setup = _config?.Setup

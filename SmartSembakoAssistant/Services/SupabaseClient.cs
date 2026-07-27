@@ -45,9 +45,11 @@ namespace SmartSembakoAssistant.Services
             _httpClient.BaseAddress = new Uri(baseUrl + "/");
             _httpClient.Timeout = TimeSpan.FromSeconds(15);
 
-            string token = !string.IsNullOrWhiteSpace(_settings.JwtToken)
-                ? _settings.JwtToken
-                : _settings.ApiKey ?? "";
+            string token = _settings.ApiKey ?? "";
+            if (!string.IsNullOrWhiteSpace(_settings.JwtToken) && _settings.JwtToken.Contains("."))
+            {
+                token = _settings.JwtToken;
+            }
 
             if (!string.IsNullOrWhiteSpace(_settings.ApiKey))
             {
