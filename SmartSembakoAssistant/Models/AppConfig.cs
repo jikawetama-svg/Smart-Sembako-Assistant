@@ -209,6 +209,14 @@ namespace SmartSembakoAssistant.Models
         public string? ApiKey { get; set; } = "YOUR_SUPABASE_ANON_OR_SERVICE_ROLE_KEY";
         public string? JwtToken { get; set; }
         public int SyncIntervalMinutes { get; set; } = 15;
+        /// <summary>ID tenant permanen untuk satu toko/merchant. Semua perangkat toko yang sama memakai nilai ini.</summary>
+        public string? MerchantId { get; set; }
+        /// <summary>ID unik instalasi/perangkat untuk audit dan diagnosis sinkronisasi.</summary>
+        public string? DeviceId { get; set; }
+        /// <summary>Menolak sync tanpa MerchantId dan JWT user/device yang tervalidasi oleh RLS Supabase.</summary>
+        public bool EnforceTenantIsolation { get; set; } = true;
+        /// <summary>primary boleh mengirim snapshot POS; read_only hanya melihat cloud untuk mencegah last-writer-wins antar perangkat.</summary>
+        public string SyncMode { get; set; } = "primary";
     }
 
     /// <summary>Konfigurasi fitur OCR struk pembelian via Telegram.</summary>

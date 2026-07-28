@@ -28,6 +28,7 @@ namespace SmartSembakoAssistant.Services
         private PeriodicTimer? _automationTimer;
         private PeriodicTimer? _outboxTimer;
         private PeriodicTimer? _dualStockWatcherTimer;
+        private PeriodicTimer? _cloudCommandQueueTimer;
         private CancellationTokenSource? _workerCts;
         private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
         private readonly Queue<DateTime> _baileysSentAt = new();
@@ -280,11 +281,13 @@ namespace SmartSembakoAssistant.Services
             _automationTimer = new PeriodicTimer(TimeSpan.FromMinutes(1));
             _outboxTimer = new PeriodicTimer(TimeSpan.FromSeconds(2));
             _dualStockWatcherTimer = new PeriodicTimer(TimeSpan.FromSeconds(_automationEngine.GetDualStockSyncIntervalSeconds()));
+            _cloudCommandQueueTimer = new PeriodicTimer(TimeSpan.FromSeconds(10));
             _ = Task.Run(() => RunDualStockWatcherLoopAsync(_workerCts.Token), _workerCts.Token);
 
             _ = Task.Run(() => RunDualStockStartupCatchUpAsync(_workerCts.Token), _workerCts.Token);
             _ = Task.Run(() => RunAutomationLoopAsync(_workerCts.Token), _workerCts.Token);
             _ = Task.Run(() => RunOutboxLoopAsync(_workerCts.Token), _workerCts.Token);
+            _ = Task.Run(() => RunCloudCommandQueueLoopAsync(_workerCts.Token), _workerCts.Token);
         }
 
         private async Task AutoCancelOldWhatsAppLikeOutboxOnStartupAsync()
@@ -336,6 +339,8 @@ namespace SmartSembakoAssistant.Services
             _outboxTimer = null;
             _dualStockWatcherTimer?.Dispose();
             _dualStockWatcherTimer = null;
+            _cloudCommandQueueTimer?.Dispose();
+            _cloudCommandQueueTimer = null;
             SetActiveBotRuntime(false);
 
             if (_telegramService != null)
@@ -411,6 +416,100 @@ namespace SmartSembakoAssistant.Services
                 catch (Exception ex)
                 {
                     await _loggingService.LogErrorAsync($"Background automation error: {ex.Message}", "Automation", ex.ToString());
+                }
+            }
+        }
+
+        private async Task RunCloudCommandQueueLoopAsync(CancellationToken cancellationToken)
+        {
+            if (_cloudCommandQueueTimer == null || _automationEngine == null)
+            {
+                return;
+            }
+
+            while (await _cloudCommandQueueTimer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    await ProcessCloudCommandQueueAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    await _loggingService.LogErrorAsync($"Cloud command queue error: {ex.Message}", "CloudCommandQueue", ex.ToString());
+                }
+            }
+        }
+
+        private async Task ProcessCloudCommandQueueAsync(CancellationToken cancellationToken)
+        {
+            if (_automationEngine == null)
+            {
+                return;
+            }
+
+            var supabase = _configService.Config?.Supabase;
+            if (supabase?.Enabled != true || string.Equals(supabase.SyncMode, "read_only", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            using var supabaseClient = new SupabaseClient(_configService);
+            var pending = await supabaseClient.GetPendingAgentCommandsAsync(limit: 5);
+            if (!pending.success)
+            {
+                await _loggingService.LogWarningAsync($"Gagal membaca antrean command cloud: {pending.error}", "CloudCommandQueue");
+                return;
+            }
+
+            string claimedBy = _configService.Config?.App?.InstanceId
+                ?? Environment.MachineName
+                ?? "desktop";
+
+            foreach (var command in pending.commands)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(command.Id) ||
+                    string.IsNullOrWhiteSpace(command.CommandText) ||
+                    string.IsNullOrWhiteSpace(command.SourceChatId))
+                {
+                    continue;
+                }
+
+                var claim = await supabaseClient.ClaimAgentCommandAsync(command.Id, claimedBy);
+                if (!claim.success)
+                {
+                    await _loggingService.LogWarningAsync($"Command cloud {command.Id} tidak bisa diklaim: {claim.error}", "CloudCommandQueue");
+                    continue;
+                }
+
+                try
+                {
+                    var inbound = new InboundMessage
+                    {
+                        Channel = ChannelType.Telegram,
+                        SenderId = command.SourceUserId ?? command.SourceChatId,
+                        SenderName = "Cloud Queue",
+                        Text = command.CommandText,
+                        MessageId = $"cloud:{command.Id}",
+                        CorrelationId = command.Id,
+                        PayloadHash = $"cloud:{command.Id}",
+                        ReceivedAt = DateTime.Now,
+                        Timestamp = command.CreatedAt?.ToLocalTime() ?? DateTime.Now
+                    };
+
+                    var outbound = await _automationEngine.ProcessInboundMessageAsync(inbound);
+                    string result = outbound?.Text ?? "Perintah cloud diproses oleh Desktop lokal.";
+                    await supabaseClient.CompleteAgentCommandAsync(command.Id, result);
+                    await _loggingService.LogInfoAsync($"Command cloud {command.Id} selesai: {command.CommandText}", "CloudCommandQueue");
+                }
+                catch (Exception ex)
+                {
+                    await supabaseClient.FailAgentCommandAsync(command.Id, ex.Message);
+                    await _loggingService.LogErrorAsync($"Command cloud {command.Id} gagal: {ex.Message}", "CloudCommandQueue", ex.ToString());
                 }
             }
         }

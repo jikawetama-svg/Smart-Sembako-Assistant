@@ -190,6 +190,11 @@ namespace SmartSembakoAssistant.Services
                 string url = $"{cloudBotUrl.TrimEnd('/')}/internal/{endpoint}";
                 using var req = new HttpRequestMessage(HttpMethod.Post, url);
                 req.Headers.Add("X-Desktop-Secret", secretToken);
+                string? merchantId = _configService.Config?.Supabase?.MerchantId;
+                if (!string.IsNullOrWhiteSpace(merchantId))
+                {
+                    req.Headers.Add("X-Merchant-ID", merchantId);
+                }
                 req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
 
                 var resp = await _cloudNotifyClient.SendAsync(req);

@@ -107,13 +107,16 @@ async def health_check():
 Buka [Render Dashboard](https://dashboard.render.com), buat **Web Service** baru dari repository Git Anda, lalu tambahkan variabel berikut pada menu **Environment**:
 
 ```text
-SUPABASE_URL=https://xuzyypufixjqfjozkvwc.supabase.co
-SUPABASE_KEY=sb_secret_YOUR_SUPABASE_SERVICE_ROLE_KEY
-TELEGRAM_BOT_TOKEN=8614246958:AAHZe8NT1D89UKuaCcdqmS32_ayHXIHW0GU
-TELEGRAM_SECRET_TOKEN=SSA2026
-GEMINI_API_KEY=AIzaSy...
-GROQ_API_KEY=gsk_...
-PORT=8000
+SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
+SUPABASE_KEY=YOUR_SUPABASE_SERVICE_ROLE_OR_ANON_KEY
+MERCHANT_ID=merchant_toko_sembako
+TENANT_ISOLATION_REQUIRED=true
+TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+TELEGRAM_SECRET_TOKEN=CHANGE_ME_RANDOM_SECRET
+OWNER_TELEGRAM_IDS=123456789
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+GROQ_API_KEY=YOUR_GROQ_API_KEY
+PORT=10000
 ```
 
 ---
@@ -124,12 +127,12 @@ Setelah Web Service di Render aktif (`https://smart-sembako-backend.onrender.com
 
 ### Perintah Curl (Linux/Mac/PowerShell):
 ```bash
-curl -X POST "https://api.telegram.org/bot8614246958:AAHZe8NT1D89UKuaCcdqmS32_ayHXIHW0GU/setWebhook?url=https://smart-sembako-backend.onrender.com/webhook/telegram&secret_token=SSA2026"
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://smart-sembako-backend.onrender.com/webhook/telegram&secret_token=<TELEGRAM_SECRET_TOKEN>"
 ```
 
 ### Memeriksa Status Webhook:
 ```bash
-curl "https://api.telegram.org/bot8614246958:AAHZe8NT1D89UKuaCcdqmS32_ayHXIHW0GU/getWebhookInfo"
+curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 ```
 **Respons Sukses**:
 ```json

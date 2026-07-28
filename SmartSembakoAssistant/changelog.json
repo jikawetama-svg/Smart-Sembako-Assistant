@@ -5,6 +5,42 @@
     "entries": [
         {
             "date": "2026-07-28",
+            "version": "7.1.0",
+            "title": "Multi-Tenant Security Foundation & Agent Runtime Blueprint",
+            "summary": [
+                "MULTI-TENANT: Desktop dan Cloud Runtime kini membawa MerchantId serta DeviceId untuk membatasi snapshot, memory, dan failover ke satu toko.",
+                "FAIL-CLOSED: Sync Desktop dan Cloud Bot menolak operasi data jika tenant isolation aktif tetapi identitas merchant/JWT belum tersedia.",
+                "DEVICE CONFLICT CONTROL: SyncMode `primary` dan `read_only` mencegah beberapa instalasi mengirim snapshot yang saling menimpa.",
+                "RLS MIGRATION: Ditambahkan skrip Supabase untuk merchants, membership, device registry, tenant-scoped policy, dan quarantine legacy data.",
+                "AI PARITY: Kontrak respons Cloud diperkuat agar konsisten dengan Desktop: anti-halusinasi, stok minus, RBAC, status snapshot, dan batas aksi write.",
+                "ARCHITECTURE: Blueprint lengkap agent runtime, migrasi, threat model, gap, dan roadmap tersedia dalam MULTITENANT_AGENT_ARCHITECTURE.md."
+            ],
+            "details": [
+                "File utama: Models/AppConfig.cs, Models/ProductSyncDTO.cs, Services/SyncService.cs, Services/SupabaseClient.cs, Services/TelegramBotService.cs, bot_runtime/config.py, bot_runtime/main.py, bot_runtime/memory/*, bot_runtime/tools/inventory_tools.py, data/supabase_multitenant_migration.sql.",
+                "Catatan deploy: RLS migration dan provisioning merchant/user perlu dijalankan di Supabase sebelum tenant isolation diaktifkan pada lingkungan produksi."
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-07-28",
+            "version": "7.0.1",
+            "title": "Cloud Bot Accuracy, Safe Routing & Sales Sync Fix",
+            "summary": [
+                "INTENT ROUTING: Perbaikan prioritas intent agar `stok kritis` dan `rekomendasi restock` selalu menggunakan daftar stok rendah, bukan pencarian produk biasa.",
+                "SAFE CLOUD/DESKTOP BOUNDARY: Perintah restock baru diarahkan ke Desktop POS; Cloud Bot tetap read-only terhadap data operasional.",
+                "STORE MEMORY SAFETY: Pertanyaan nama toko tidak lagi dapat mengubah Store Brain; perubahan nama kini membutuhkan perintah eksplisit `set nama toko: ...`.",
+                "CONVERSATION MEMORY: Pertanyaan mengenai permintaan terakhir dijawab deterministik dari riwayat yang tersimpan.",
+                "SALES SYNC: Jumlah transaksi harian pada summary Supabase kini diambil dari POS, bukan dikirim sebagai nol.",
+                "DOCUMENTATION: Ditambahkan audit gap dan roadmap optimasi Cloud Bot."
+            ],
+            "details": [
+                "File utama: bot_runtime/agents/master_agent.py, Services/SyncService.cs, bot_runtime/tests/test_bot_runtime.py, bot_runtime/tests/test_bot_runtime_std.py, CLOUD_BOT_GAP_AND_OPTIMIZATION.md, bot_runtime/README.md.",
+                "Verification: Python compile dan tujuh kasus routing intent berhasil. Pytest tidak tersedia pada interpreter lokal saat verifikasi."
+            ],
+            "status": "implemented"
+        },
+        {
+            "date": "2026-07-28",
             "version": "7.0.0",
             "title": "Cloud Bot Feature Parity, AI Memory Integration & Automated Failover Engine",
             "summary": [

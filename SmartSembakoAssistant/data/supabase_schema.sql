@@ -91,7 +91,62 @@ CREATE TABLE IF NOT EXISTS public.inventory_sync (
 
 CREATE INDEX IF NOT EXISTS idx_inventory_sync_product ON public.inventory_sync (product_name);
 
--- 8. Tabel Store Brain (Business Memory per Store ID & User ID)
+-- 8. Tabel Sync Pelanggan & Piutang
+CREATE TABLE IF NOT EXISTS public.customers_sync (
+    id                    TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    phone                 TEXT,
+    total_debt            NUMERIC DEFAULT 0,
+    last_transaction_date TIMESTAMPTZ,
+    source_device_id      TEXT,
+    synced_at             TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_customers_sync_name ON public.customers_sync (name);
+CREATE INDEX IF NOT EXISTS idx_customers_sync_debt ON public.customers_sync (total_debt DESC);
+
+-- 9. Tabel Sync Supplier
+CREATE TABLE IF NOT EXISTS public.suppliers_sync (
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    phone            TEXT,
+    email            TEXT,
+    address          TEXT,
+    source_device_id TEXT,
+    synced_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_suppliers_sync_name ON public.suppliers_sync (name);
+
+-- 10. Queue perintah Cloud -> Desktop.
+-- Cloud Bot hanya membuat draft perintah. Desktop lokal yang mengeksekusi
+-- saat aplikasi dibuka agar pos.db tetap menjadi sumber tulis utama.
+CREATE TABLE IF NOT EXISTS public.agent_command_queue (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    merchant_id           TEXT,
+    source_channel        TEXT NOT NULL DEFAULT 'telegram',
+    source_chat_id        TEXT NOT NULL,
+    source_user_id        TEXT,
+    source_message_id     TEXT,
+    command_text          TEXT NOT NULL,
+    command_kind          TEXT NOT NULL,
+    status                TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+    requires_local_app    BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message         TEXT,
+    result_text           TEXT,
+    claimed_by            TEXT,
+    claimed_at            TIMESTAMPTZ,
+    completed_at          TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_command_queue_pending
+    ON public.agent_command_queue (merchant_id, status, created_at)
+    WHERE status IN ('pending', 'processing');
+
+-- 11. Tabel Store Brain (Business Memory per Store ID & User ID)
 CREATE TABLE IF NOT EXISTS public.store_brain (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id        TEXT NOT NULL DEFAULT 'store_main',
@@ -118,6 +173,9 @@ ALTER TABLE public.sync_metadata ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversations_memory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.restock_sync ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_sync ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customers_sync ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suppliers_sync ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_command_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.store_brain ENABLE ROW LEVEL SECURITY;
 
 -- Policy products_sync:
@@ -163,6 +221,15 @@ ALTER TABLE public.conversations_memory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.restock_sync ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_sync ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "full_access_conversations_memory" ON public.conversations_memory;
+DROP POLICY IF EXISTS "full_access_restock_sync" ON public.restock_sync;
+DROP POLICY IF EXISTS "full_access_inventory_sync" ON public.inventory_sync;
+DROP POLICY IF EXISTS "full_access_customers_sync" ON public.customers_sync;
+DROP POLICY IF EXISTS "full_access_suppliers_sync" ON public.suppliers_sync;
+DROP POLICY IF EXISTS "full_access_agent_command_queue" ON public.agent_command_queue;
 CREATE POLICY "full_access_conversations_memory" ON public.conversations_memory FOR ALL USING (TRUE);
 CREATE POLICY "full_access_restock_sync" ON public.restock_sync FOR ALL USING (TRUE);
 CREATE POLICY "full_access_inventory_sync" ON public.inventory_sync FOR ALL USING (TRUE);
+CREATE POLICY "full_access_customers_sync" ON public.customers_sync FOR ALL USING (TRUE);
+CREATE POLICY "full_access_suppliers_sync" ON public.suppliers_sync FOR ALL USING (TRUE);
+CREATE POLICY "full_access_agent_command_queue" ON public.agent_command_queue FOR ALL USING (TRUE);

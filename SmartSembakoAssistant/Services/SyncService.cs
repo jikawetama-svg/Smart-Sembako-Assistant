@@ -81,6 +81,19 @@ namespace SmartSembakoAssistant.Services
                 NotifyStateChanged();
                 return false;
             }
+            if (supabaseConfig.EnforceTenantIsolation &&
+                (string.IsNullOrWhiteSpace(supabaseConfig.MerchantId) || string.IsNullOrWhiteSpace(supabaseConfig.JwtToken)))
+            {
+                LastSyncStatus = "Sync ditolak: MerchantId atau JWT tenant belum dikonfigurasi";
+                NotifyStateChanged();
+                return false;
+            }
+            if (string.Equals(supabaseConfig.SyncMode, "read_only", StringComparison.OrdinalIgnoreCase))
+            {
+                LastSyncStatus = "Sync write dilewati: perangkat ini read_only";
+                NotifyStateChanged();
+                return true;
+            }
 
             _isSyncing = true;
             LastSyncStatus = "Sedang Menyinkronkan...";
@@ -98,7 +111,11 @@ namespace SmartSembakoAssistant.Services
                 {
                     var dtos = deltaProducts.Select(p => new ProductSyncDTO
                     {
-                        Id = p.Id ?? string.Empty,
+                        // ID cloud bersifat global; ID produk POS asli tetap disimpan untuk audit.
+                        Id = $"{supabaseConfig.MerchantId}:{p.Id}",
+                        MerchantId = supabaseConfig.MerchantId ?? string.Empty,
+                        SourceDeviceId = supabaseConfig.DeviceId,
+                        SourceProductId = p.Id,
                         Name = p.Name ?? string.Empty,
                         Stock = p.Stock ?? 0,
                         Unit = p.Unit ?? "pcs",
@@ -124,13 +141,19 @@ namespace SmartSembakoAssistant.Services
                     {
                         decimal todayRevenue = await _posDbService.GetTodayRevenueAsync();
                         decimal todayProfit = await _posDbService.GetTodayProfitAsync();
+                        int todayTransactionCount = await _posDbService.GetSalesTransactionCountAsync(
+                            DateTime.Today,
+                            DateTime.Today);
 
                         var summaryDTO = new TransactionSummaryDTO
                         {
+                            Id = $"{supabaseConfig.MerchantId}:{DateTime.UtcNow:yyyy-MM-dd}",
+                            MerchantId = supabaseConfig.MerchantId ?? string.Empty,
+                            SourceDeviceId = supabaseConfig.DeviceId,
                             Date = DateTime.UtcNow.ToString("yyyy-MM-dd"),
                             TotalRevenue = todayRevenue,
                             TotalProfit = todayProfit,
-                            TotalTransactions = 0,
+                            TotalTransactions = todayTransactionCount,
                             SyncedAt = DateTime.UtcNow
                         };
 
@@ -140,6 +163,72 @@ namespace SmartSembakoAssistant.Services
                     catch (Exception exSummary)
                     {
                         await _loggingService.LogWarningAsync($"Gagal update summary transaksi Supabase: {exSummary.Message}", "SyncService");
+                    }
+
+                    try
+                    {
+                        var receivables = await _posDbService.GetCustomerReceivablesAsync();
+                        var debtByCustomerId = receivables
+                            .Where(item => !string.IsNullOrWhiteSpace(item.CustomerId))
+                            .GroupBy(item => item.CustomerId!)
+                            .ToDictionary(
+                                group => group.Key,
+                                group => new
+                                {
+                                    TotalDebt = group.Sum(item => item.TotalOwed),
+                                    LastTransactionDate = group.Max(item => item.LastTransactionDate)
+                                });
+
+                        var customers = await _posDbService.GetCustomersAsync(null, null, onlyCustomers: true);
+                        var customerDtos = customers
+                            .Where(customer => !string.IsNullOrWhiteSpace(customer.Id) && !string.IsNullOrWhiteSpace(customer.Name))
+                            .Select(customer =>
+                            {
+                                debtByCustomerId.TryGetValue(customer.Id!, out var debt);
+                                return new CustomerSyncDTO
+                                {
+                                    Id = $"{supabaseConfig.MerchantId}:{customer.Id}",
+                                    MerchantId = supabaseConfig.MerchantId ?? string.Empty,
+                                    SourceDeviceId = supabaseConfig.DeviceId,
+                                    Name = customer.Name ?? string.Empty,
+                                    Phone = customer.Phone,
+                                    TotalDebt = debt?.TotalDebt ?? 0,
+                                    LastTransactionDate = debt?.LastTransactionDate ?? customer.LastPurchaseDate,
+                                    SyncedAt = DateTime.UtcNow
+                                };
+                            })
+                            .ToList();
+
+                        var customerSync = await supabaseClient.UpsertCustomersAsync(customerDtos);
+                        if (!customerSync.success)
+                        {
+                            await _loggingService.LogWarningAsync($"Gagal sync pelanggan Supabase: {customerSync.error}", "SyncService");
+                        }
+
+                        var suppliers = await _posDbService.GetSuppliersAsync(null, null);
+                        var supplierDtos = suppliers
+                            .Where(supplier => !string.IsNullOrWhiteSpace(supplier.Id) && !string.IsNullOrWhiteSpace(supplier.Name))
+                            .Select(supplier => new SupplierSyncDTO
+                            {
+                                Id = $"{supabaseConfig.MerchantId}:{supplier.Id}",
+                                MerchantId = supabaseConfig.MerchantId ?? string.Empty,
+                                SourceDeviceId = supabaseConfig.DeviceId,
+                                Name = supplier.Name ?? string.Empty,
+                                Phone = supplier.Phone,
+                                Email = supplier.Email,
+                                SyncedAt = DateTime.UtcNow
+                            })
+                            .ToList();
+
+                        var supplierSync = await supabaseClient.UpsertSuppliersAsync(supplierDtos);
+                        if (!supplierSync.success)
+                        {
+                            await _loggingService.LogWarningAsync($"Gagal sync supplier Supabase: {supplierSync.error}", "SyncService");
+                        }
+                    }
+                    catch (Exception exDirectorySync)
+                    {
+                        await _loggingService.LogWarningAsync($"Gagal sync pelanggan/supplier Supabase: {exDirectorySync.Message}", "SyncService");
                     }
 
                     _lastSyncTime = DateTime.UtcNow;

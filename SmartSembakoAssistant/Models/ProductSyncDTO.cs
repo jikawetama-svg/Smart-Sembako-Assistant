@@ -8,6 +8,15 @@ namespace SmartSembakoAssistant.Models
     /// </summary>
     public class ProductSyncDTO
     {
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_device_id")]
+        public string? SourceDeviceId { get; set; }
+
+        [JsonProperty("source_product_id")]
+        public string? SourceProductId { get; set; }
+
         [JsonProperty("id")]
         public string Id { get; set; } = string.Empty;
 
@@ -44,6 +53,15 @@ namespace SmartSembakoAssistant.Models
     /// </summary>
     public class TransactionSummaryDTO
     {
+        [JsonProperty("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_device_id")]
+        public string? SourceDeviceId { get; set; }
+
         [JsonProperty("date")]
         public string Date { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-dd");
 
@@ -68,6 +86,12 @@ namespace SmartSembakoAssistant.Models
     /// </summary>
     public class RestockSyncDTO
     {
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_device_id")]
+        public string? SourceDeviceId { get; set; }
+
         [JsonProperty("product_name")]
         public string ProductName { get; set; } = string.Empty;
 
@@ -95,6 +119,12 @@ namespace SmartSembakoAssistant.Models
     /// </summary>
     public class InventorySyncDTO
     {
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_device_id")]
+        public string? SourceDeviceId { get; set; }
+
         [JsonProperty("product_name")]
         public string ProductName { get; set; } = string.Empty;
 
@@ -122,6 +152,12 @@ namespace SmartSembakoAssistant.Models
     /// </summary>
     public class CustomerSyncDTO
     {
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_device_id")]
+        public string? SourceDeviceId { get; set; }
+
         [JsonProperty("id")]
         public string Id { get; set; } = string.Empty;
 
@@ -139,5 +175,68 @@ namespace SmartSembakoAssistant.Models
 
         [JsonProperty("synced_at")]
         public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Data Transfer Object untuk sinkronisasi supplier ke Cloud.
+    /// </summary>
+    public class SupplierSyncDTO
+    {
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_device_id")]
+        public string? SourceDeviceId { get; set; }
+
+        [JsonProperty("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonProperty("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonProperty("phone")]
+        public string? Phone { get; set; }
+
+        [JsonProperty("email")]
+        public string? Email { get; set; }
+
+        [JsonProperty("address")]
+        public string? Address { get; set; }
+
+        [JsonProperty("synced_at")]
+        public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Perintah dari Cloud Bot yang harus dieksekusi Desktop lokal.
+    /// </summary>
+    public class AgentCommandQueueItem
+    {
+        [JsonProperty("id")]
+        public string Id { get; set; } = string.Empty;
+
+        [JsonProperty("merchant_id")]
+        public string MerchantId { get; set; } = string.Empty;
+
+        [JsonProperty("source_channel")]
+        public string SourceChannel { get; set; } = "telegram";
+
+        [JsonProperty("source_chat_id")]
+        public string SourceChatId { get; set; } = string.Empty;
+
+        [JsonProperty("source_user_id")]
+        public string? SourceUserId { get; set; }
+
+        [JsonProperty("command_text")]
+        public string CommandText { get; set; } = string.Empty;
+
+        [JsonProperty("command_kind")]
+        public string CommandKind { get; set; } = string.Empty;
+
+        [JsonProperty("status")]
+        public string Status { get; set; } = "pending";
+
+        [JsonProperty("created_at")]
+        public DateTime? CreatedAt { get; set; }
     }
 }

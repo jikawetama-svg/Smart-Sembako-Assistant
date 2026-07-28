@@ -62,11 +62,30 @@ namespace SmartSembakoAssistant.Services
             }
         }
 
-        public async Task<(bool success, string message)> TestConnectionAsync()
+        private bool HasValidTenantConfiguration(out string error)
         {
+            error = string.Empty;
             if (_settings == null || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.Url))
             {
-                return (false, "Supabase tidak terkonfigurasi atau dinonaktifkan.");
+                error = "Supabase tidak aktif atau belum terkonfigurasi.";
+                return false;
+            }
+
+            if (_settings.EnforceTenantIsolation &&
+                (string.IsNullOrWhiteSpace(_settings.MerchantId) || string.IsNullOrWhiteSpace(_settings.JwtToken)))
+            {
+                error = "Tenant isolation aktif: MerchantId dan JwtToken Supabase wajib diisi.";
+                return false;
+            }
+
+            return true;
+        }
+
+        public async Task<(bool success, string message)> TestConnectionAsync()
+        {
+            if (!HasValidTenantConfiguration(out var configError))
+            {
+                return (false, configError);
             }
 
             try
@@ -93,9 +112,9 @@ namespace SmartSembakoAssistant.Services
                 return (true, 0, null);
             }
 
-            if (_settings == null || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.Url))
+            if (!HasValidTenantConfiguration(out var configError))
             {
-                return (false, 0, "Supabase tidak aktif atau belum terkonfigurasi.");
+                return (false, 0, configError);
             }
 
             try
@@ -131,9 +150,9 @@ namespace SmartSembakoAssistant.Services
                 return (true, null);
             }
 
-            if (_settings == null || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.Url))
+            if (!HasValidTenantConfiguration(out var configError))
             {
-                return (false, "Supabase tidak aktif.");
+                return (false, configError);
             }
 
             try
@@ -164,7 +183,7 @@ namespace SmartSembakoAssistant.Services
         public async Task<(bool success, string? error)> UpsertRestockSyncAsync(List<RestockSyncDTO> items)
         {
             if (items == null || items.Count == 0) return (true, null);
-            if (_settings == null || !_settings.Enabled) return (false, "Supabase tidak aktif.");
+            if (!HasValidTenantConfiguration(out var configError)) return (false, configError);
 
             try
             {
@@ -185,7 +204,7 @@ namespace SmartSembakoAssistant.Services
         public async Task<(bool success, string? error)> UpsertInventorySyncAsync(List<InventorySyncDTO> items)
         {
             if (items == null || items.Count == 0) return (true, null);
-            if (_settings == null || !_settings.Enabled) return (false, "Supabase tidak aktif.");
+            if (!HasValidTenantConfiguration(out var configError)) return (false, configError);
 
             try
             {
@@ -206,7 +225,7 @@ namespace SmartSembakoAssistant.Services
         public async Task<(bool success, int count, string? error)> UpsertCustomersAsync(List<CustomerSyncDTO> customers)
         {
             if (customers == null || customers.Count == 0) return (true, 0, null);
-            if (_settings == null || !_settings.Enabled) return (false, 0, "Supabase tidak aktif.");
+            if (!HasValidTenantConfiguration(out var configError)) return (false, 0, configError);
 
             try
             {
@@ -224,16 +243,160 @@ namespace SmartSembakoAssistant.Services
             catch (Exception ex) { return (false, 0, ex.Message); }
         }
 
-        public async Task<(bool success, string? error)> UpdateSyncMetadataAsync(string key, string value)
+        public async Task<(bool success, int count, string? error)> UpsertSuppliersAsync(List<SupplierSyncDTO> suppliers)
         {
-            if (_settings == null || !_settings.Enabled || string.IsNullOrWhiteSpace(_settings.Url))
+            if (suppliers == null || suppliers.Count == 0) return (true, 0, null);
+            if (!HasValidTenantConfiguration(out var configError)) return (false, 0, configError);
+
+            try
             {
-                return (false, "Supabase tidak aktif.");
+                string json = JsonConvert.SerializeObject(suppliers);
+                using var request = new HttpRequestMessage(HttpMethod.Post, "suppliers_sync")
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                var response = await _httpClient.SendAsync(request);
+                return response.IsSuccessStatusCode
+                    ? (true, suppliers.Count, null)
+                    : (false, 0, await response.Content.ReadAsStringAsync());
+            }
+            catch (Exception ex) { return (false, 0, ex.Message); }
+        }
+
+        public async Task<(bool success, List<AgentCommandQueueItem> commands, string? error)> GetPendingAgentCommandsAsync(int limit = 10)
+        {
+            if (!HasValidTenantConfiguration(out var configError))
+            {
+                return (false, new List<AgentCommandQueueItem>(), configError);
             }
 
             try
             {
-                var payload = new[] { new { key = key, value = value, updated_at = DateTime.UtcNow } };
+                string merchantFilter = Uri.EscapeDataString($"eq.{_settings!.MerchantId}");
+                string url =
+                    "agent_command_queue" +
+                    "?select=id,merchant_id,source_channel,source_chat_id,source_user_id,command_text,command_kind,status,created_at" +
+                    $"&merchant_id={merchantFilter}" +
+                    "&status=eq.pending" +
+                    "&order=created_at.asc" +
+                    $"&limit={Math.Max(1, Math.Min(limit, 25))}";
+                var response = await _httpClient.GetAsync(url);
+                string body = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    return (false, new List<AgentCommandQueueItem>(), $"HTTP {(int)response.StatusCode}: {body}");
+                }
+
+                var commands = JsonConvert.DeserializeObject<List<AgentCommandQueueItem>>(body) ?? new List<AgentCommandQueueItem>();
+                return (true, commands, null);
+            }
+            catch (Exception ex)
+            {
+                return (false, new List<AgentCommandQueueItem>(), ex.Message);
+            }
+        }
+
+        public async Task<(bool success, string? error)> ClaimAgentCommandAsync(string commandId, string claimedBy)
+        {
+            if (string.IsNullOrWhiteSpace(commandId))
+            {
+                return (false, "Command id kosong.");
+            }
+            if (!HasValidTenantConfiguration(out var configError))
+            {
+                return (false, configError);
+            }
+
+            var payload = new
+            {
+                status = "processing",
+                claimed_by = claimedBy,
+                claimed_at = DateTime.UtcNow,
+                updated_at = DateTime.UtcNow
+            };
+            return await PatchAgentCommandAsync(commandId, payload, requirePending: true);
+        }
+
+        public async Task<(bool success, string? error)> CompleteAgentCommandAsync(string commandId, string resultText)
+        {
+            var payload = new
+            {
+                status = "completed",
+                result_text = resultText,
+                completed_at = DateTime.UtcNow,
+                updated_at = DateTime.UtcNow
+            };
+            return await PatchAgentCommandAsync(commandId, payload);
+        }
+
+        public async Task<(bool success, string? error)> FailAgentCommandAsync(string commandId, string errorMessage)
+        {
+            var payload = new
+            {
+                status = "failed",
+                error_message = errorMessage,
+                completed_at = DateTime.UtcNow,
+                updated_at = DateTime.UtcNow
+            };
+            return await PatchAgentCommandAsync(commandId, payload);
+        }
+
+        private async Task<(bool success, string? error)> PatchAgentCommandAsync(string commandId, object payload, bool requirePending = false)
+        {
+            if (!HasValidTenantConfiguration(out var configError))
+            {
+                return (false, configError);
+            }
+
+            try
+            {
+                string url = $"agent_command_queue?id=eq.{Uri.EscapeDataString(commandId)}";
+                if (requirePending)
+                {
+                    url += "&status=eq.pending";
+                }
+
+                string json = JsonConvert.SerializeObject(payload);
+                using var request = new HttpRequestMessage(HttpMethod.Patch, url)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+                request.Headers.Add("Prefer", "return=minimal");
+                var response = await _httpClient.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                {
+                    return (true, null);
+                }
+
+                return (false, $"HTTP {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
+
+        public async Task<(bool success, string? error)> UpdateSyncMetadataAsync(string key, string value)
+        {
+            if (!HasValidTenantConfiguration(out var configError))
+            {
+                return (false, configError);
+            }
+
+            try
+            {
+                string tenantKey = $"{_settings!.MerchantId}:{key}";
+                var payload = new[]
+                {
+                    new
+                    {
+                        key = tenantKey,
+                        merchant_id = _settings.MerchantId,
+                        value = value,
+                        updated_at = DateTime.UtcNow
+                    }
+                };
                 string json = JsonConvert.SerializeObject(payload);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "sync_metadata")
                 {
