@@ -131,13 +131,7 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 string json = JsonConvert.SerializeObject(products);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "products_sync")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-
-                // Upsert header for Supabase REST API
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("products_sync", json);
 
                 var response = await _httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
@@ -152,6 +146,19 @@ namespace SmartSembakoAssistant.Services
             {
                 return (false, 0, ex.Message);
             }
+        }
+
+        private HttpRequestMessage CreateUpsertPostRequest(string endpoint, string json, string? onConflict = null)
+        {
+            string url = string.IsNullOrWhiteSpace(onConflict)
+                ? endpoint
+                : $"{endpoint}?on_conflict={Uri.EscapeDataString(onConflict)}";
+            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+            request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+            return request;
         }
 
         public async Task<(bool success, string? error)> UpsertTransactionSummaryAsync(TransactionSummaryDTO summary)
@@ -175,12 +182,7 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 string json = JsonConvert.SerializeObject(summary);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "transactions_summary")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("transactions_summary", json);
 
                 var response = await _httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
@@ -208,11 +210,7 @@ namespace SmartSembakoAssistant.Services
                 if (!bootstrap.success) return (false, bootstrap.error);
 
                 string json = JsonConvert.SerializeObject(items);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "restock_sync")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("restock_sync", json);
                 var response = await _httpClient.SendAsync(request);
                 return response.IsSuccessStatusCode
                     ? (true, null)
@@ -232,11 +230,7 @@ namespace SmartSembakoAssistant.Services
                 if (!bootstrap.success) return (false, bootstrap.error);
 
                 string json = JsonConvert.SerializeObject(items);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "inventory_sync")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("inventory_sync", json);
                 var response = await _httpClient.SendAsync(request);
                 return response.IsSuccessStatusCode
                     ? (true, null)
@@ -256,11 +250,7 @@ namespace SmartSembakoAssistant.Services
                 if (!bootstrap.success) return (false, 0, bootstrap.error);
 
                 string json = JsonConvert.SerializeObject(customers);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "customers_sync")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("customers_sync", json);
                 var response = await _httpClient.SendAsync(request);
                 return response.IsSuccessStatusCode
                     ? (true, customers.Count, null)
@@ -280,11 +270,7 @@ namespace SmartSembakoAssistant.Services
                 if (!bootstrap.success) return (false, 0, bootstrap.error);
 
                 string json = JsonConvert.SerializeObject(suppliers);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "suppliers_sync")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("suppliers_sync", json);
                 var response = await _httpClient.SendAsync(request);
                 return response.IsSuccessStatusCode
                     ? (true, suppliers.Count, null)
@@ -425,11 +411,7 @@ namespace SmartSembakoAssistant.Services
                         status = "active"
                     }
                 };
-                using var merchantRequest = new HttpRequestMessage(HttpMethod.Post, "merchants")
-                {
-                    Content = new StringContent(JsonConvert.SerializeObject(merchantPayload), Encoding.UTF8, "application/json")
-                };
-                merchantRequest.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var merchantRequest = CreateUpsertPostRequest("merchants", JsonConvert.SerializeObject(merchantPayload));
                 var merchantResponse = await _httpClient.SendAsync(merchantRequest);
 
                 // Older schemas may not have merchants table yet. In that case, keep
@@ -453,11 +435,10 @@ namespace SmartSembakoAssistant.Services
                             last_seen_at = DateTime.UtcNow
                         }
                     };
-                    using var deviceRequest = new HttpRequestMessage(HttpMethod.Post, "merchant_devices")
-                    {
-                        Content = new StringContent(JsonConvert.SerializeObject(devicePayload), Encoding.UTF8, "application/json")
-                    };
-                    deviceRequest.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                    using var deviceRequest = CreateUpsertPostRequest(
+                        "merchant_devices",
+                        JsonConvert.SerializeObject(devicePayload),
+                        "merchant_id,device_id");
                     var deviceResponse = await _httpClient.SendAsync(deviceRequest);
                     if (!deviceResponse.IsSuccessStatusCode &&
                         deviceResponse.StatusCode != System.Net.HttpStatusCode.NotFound)
@@ -496,12 +477,7 @@ namespace SmartSembakoAssistant.Services
                     }
                 };
                 string json = JsonConvert.SerializeObject(payload);
-                using var request = new HttpRequestMessage(HttpMethod.Post, "sync_metadata")
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-
-                request.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                using var request = CreateUpsertPostRequest("sync_metadata", json);
 
                 var response = await _httpClient.SendAsync(request);
                 return response.IsSuccessStatusCode
