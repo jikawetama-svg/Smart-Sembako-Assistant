@@ -277,7 +277,11 @@ namespace SmartSembakoAssistant.Services
                         Url = _config.Supabase.Url,
                         ApiKey = EncryptValue(_config.Supabase.ApiKey),
                         JwtToken = _config.Supabase.JwtToken,
-                        SyncIntervalMinutes = _config.Supabase.SyncIntervalMinutes
+                        SyncIntervalMinutes = _config.Supabase.SyncIntervalMinutes,
+                        MerchantId = _config.Supabase.MerchantId,
+                        DeviceId = _config.Supabase.DeviceId,
+                        EnforceTenantIsolation = _config.Supabase.EnforceTenantIsolation,
+                        SyncMode = _config.Supabase.SyncMode
                     } : null,
                     App = _config?.App,
                     Setup = _config?.Setup
@@ -321,10 +325,38 @@ namespace SmartSembakoAssistant.Services
                 changed = true;
             }
 
+            if (_config.Supabase != null)
+            {
+                if (string.IsNullOrWhiteSpace(_config.Supabase.MerchantId))
+                {
+                    _config.Supabase.MerchantId = BuildDefaultMerchantId();
+                    changed = true;
+                }
+
+                if (string.IsNullOrWhiteSpace(_config.Supabase.DeviceId))
+                {
+                    string suffix = string.IsNullOrEmpty(_config.App.InstanceId) 
+                        ? Guid.NewGuid().ToString("N").Substring(0, 4) 
+                        : _config.App.InstanceId.Substring(0, Math.Min(4, _config.App.InstanceId.Length));
+                    
+                    // Normalisasi machineName (hanya huruf, angka, dan dash)
+                    string safeMachineName = new string(machineName.Where(c => char.IsLetterOrDigit(c) || c == '-').ToArray()).ToLower();
+                    if (string.IsNullOrWhiteSpace(safeMachineName)) safeMachineName = "device";
+
+                    _config.Supabase.DeviceId = $"{safeMachineName}-{suffix}";
+                    changed = true;
+                }
+            }
+
             if (changed && saveIfChanged)
             {
                 SaveConfig();
             }
+        }
+
+        private static string BuildDefaultMerchantId()
+        {
+            return "merchant_smart_sembako";
         }
 
         private string DecryptValue(string? encryptedValue)

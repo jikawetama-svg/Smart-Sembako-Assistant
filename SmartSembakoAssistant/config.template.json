@@ -122,9 +122,9 @@
     "ApiKey": "YOUR_SUPABASE_SERVICE_ROLE_KEY",
     "JwtToken": "",
     "SyncIntervalMinutes": 15,
-    "MerchantId": "merchant_toko_teh_asiah",
-    "DeviceId": "kasir-utama-01",
-    "EnforceTenantIsolation": true,
+    "MerchantId": "",
+    "DeviceId": "",
+    "EnforceTenantIsolation": false,
     "SyncMode": "primary"
   },
   "OcrReceipt": {

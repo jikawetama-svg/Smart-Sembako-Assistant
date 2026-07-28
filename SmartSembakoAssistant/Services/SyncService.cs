@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -81,10 +81,10 @@ namespace SmartSembakoAssistant.Services
                 NotifyStateChanged();
                 return false;
             }
-            if (supabaseConfig.EnforceTenantIsolation &&
-                (string.IsNullOrWhiteSpace(supabaseConfig.MerchantId) || string.IsNullOrWhiteSpace(supabaseConfig.JwtToken)))
+            if (string.IsNullOrWhiteSpace(supabaseConfig.MerchantId))
             {
-                LastSyncStatus = "Sync ditolak: MerchantId atau JWT tenant belum dikonfigurasi";
+                LastSyncStatus = "Sync ditolak: MerchantId belum tersedia. Buka ulang aplikasi agar dibuat otomatis.";
+                await _loggingService.LogWarningAsync(LastSyncStatus, "SyncService");
                 NotifyStateChanged();
                 return false;
             }

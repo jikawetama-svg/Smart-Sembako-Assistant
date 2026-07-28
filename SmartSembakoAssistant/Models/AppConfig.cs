@@ -213,8 +213,8 @@ namespace SmartSembakoAssistant.Models
         public string? MerchantId { get; set; }
         /// <summary>ID unik instalasi/perangkat untuk audit dan diagnosis sinkronisasi.</summary>
         public string? DeviceId { get; set; }
-        /// <summary>Menolak sync tanpa MerchantId dan JWT user/device yang tervalidasi oleh RLS Supabase.</summary>
-        public bool EnforceTenantIsolation { get; set; } = true;
+        /// <summary>Menambahkan merchant_id ke semua payload cloud. MerchantId dan DeviceId dibuat otomatis jika kosong.</summary>
+        public bool EnforceTenantIsolation { get; set; } = false;
         /// <summary>primary boleh mengirim snapshot POS; read_only hanya melihat cloud untuk mencegah last-writer-wins antar perangkat.</summary>
         public string SyncMode { get; set; } = "primary";
     }

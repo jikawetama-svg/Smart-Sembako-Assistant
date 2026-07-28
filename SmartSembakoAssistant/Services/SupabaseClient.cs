@@ -71,10 +71,9 @@ namespace SmartSembakoAssistant.Services
                 return false;
             }
 
-            if (_settings.EnforceTenantIsolation &&
-                (string.IsNullOrWhiteSpace(_settings.MerchantId) || string.IsNullOrWhiteSpace(_settings.JwtToken)))
+            if (string.IsNullOrWhiteSpace(_settings.MerchantId))
             {
-                error = "Tenant isolation aktif: MerchantId dan JwtToken Supabase wajib diisi.";
+                error = "MerchantId belum tersedia. Buka ulang aplikasi agar config membuat MerchantId otomatis, atau isi manual di Settings.";
                 return false;
             }
 
@@ -90,6 +89,12 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success)
+                {
+                    return (false, bootstrap.error ?? "Bootstrap merchant gagal.");
+                }
+
                 var response = await _httpClient.GetAsync("products_sync?select=id&limit=1");
                 if (response.IsSuccessStatusCode)
                 {
@@ -119,6 +124,12 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success)
+                {
+                    return (false, 0, bootstrap.error);
+                }
+
                 string json = JsonConvert.SerializeObject(products);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "products_sync")
                 {
@@ -157,6 +168,12 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success)
+                {
+                    return (false, bootstrap.error);
+                }
+
                 string json = JsonConvert.SerializeObject(summary);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "transactions_summary")
                 {
@@ -187,6 +204,9 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success) return (false, bootstrap.error);
+
                 string json = JsonConvert.SerializeObject(items);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "restock_sync")
                 {
@@ -208,6 +228,9 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success) return (false, bootstrap.error);
+
                 string json = JsonConvert.SerializeObject(items);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "inventory_sync")
                 {
@@ -229,6 +252,9 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success) return (false, 0, bootstrap.error);
+
                 string json = JsonConvert.SerializeObject(customers);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "customers_sync")
                 {
@@ -250,6 +276,9 @@ namespace SmartSembakoAssistant.Services
 
             try
             {
+                var bootstrap = await EnsureMerchantBootstrapAsync();
+                if (!bootstrap.success) return (false, 0, bootstrap.error);
+
                 string json = JsonConvert.SerializeObject(suppliers);
                 using var request = new HttpRequestMessage(HttpMethod.Post, "suppliers_sync")
                 {
@@ -370,6 +399,75 @@ namespace SmartSembakoAssistant.Services
                 }
 
                 return (false, $"HTTP {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
+
+        private async Task<(bool success, string? error)> EnsureMerchantBootstrapAsync()
+        {
+            if (_settings == null || string.IsNullOrWhiteSpace(_settings.MerchantId))
+            {
+                return (false, "MerchantId belum tersedia.");
+            }
+
+            try
+            {
+                var merchantPayload = new[]
+                {
+                    new
+                    {
+                        id = _settings.MerchantId,
+                        display_name = _settings.MerchantId,
+                        timezone = "Asia/Jakarta",
+                        status = "active"
+                    }
+                };
+                using var merchantRequest = new HttpRequestMessage(HttpMethod.Post, "merchants")
+                {
+                    Content = new StringContent(JsonConvert.SerializeObject(merchantPayload), Encoding.UTF8, "application/json")
+                };
+                merchantRequest.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                var merchantResponse = await _httpClient.SendAsync(merchantRequest);
+
+                // Older schemas may not have merchants table yet. In that case, keep
+                // syncing against simple tables and let the schema update add it later.
+                if (!merchantResponse.IsSuccessStatusCode &&
+                    merchantResponse.StatusCode != System.Net.HttpStatusCode.NotFound)
+                {
+                    string body = await merchantResponse.Content.ReadAsStringAsync();
+                    return (false, $"Bootstrap merchant gagal HTTP {(int)merchantResponse.StatusCode}: {body}");
+                }
+
+                if (!string.IsNullOrWhiteSpace(_settings.DeviceId))
+                {
+                    var devicePayload = new[]
+                    {
+                        new
+                        {
+                            merchant_id = _settings.MerchantId,
+                            device_id = _settings.DeviceId,
+                            label = Environment.MachineName,
+                            last_seen_at = DateTime.UtcNow
+                        }
+                    };
+                    using var deviceRequest = new HttpRequestMessage(HttpMethod.Post, "merchant_devices")
+                    {
+                        Content = new StringContent(JsonConvert.SerializeObject(devicePayload), Encoding.UTF8, "application/json")
+                    };
+                    deviceRequest.Headers.Add("Prefer", "resolution=merge-duplicates,return=minimal");
+                    var deviceResponse = await _httpClient.SendAsync(deviceRequest);
+                    if (!deviceResponse.IsSuccessStatusCode &&
+                        deviceResponse.StatusCode != System.Net.HttpStatusCode.NotFound)
+                    {
+                        string body = await deviceResponse.Content.ReadAsStringAsync();
+                        return (false, $"Bootstrap device gagal HTTP {(int)deviceResponse.StatusCode}: {body}");
+                    }
+                }
+
+                return (true, null);
             }
             catch (Exception ex)
             {
