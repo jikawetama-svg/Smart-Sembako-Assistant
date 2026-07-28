@@ -281,7 +281,7 @@ namespace SmartSembakoAssistant.Services
             _automationTimer = new PeriodicTimer(TimeSpan.FromMinutes(1));
             _outboxTimer = new PeriodicTimer(TimeSpan.FromSeconds(2));
             _dualStockWatcherTimer = new PeriodicTimer(TimeSpan.FromSeconds(_automationEngine.GetDualStockSyncIntervalSeconds()));
-            _cloudCommandQueueTimer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+            _cloudCommandQueueTimer = new PeriodicTimer(TimeSpan.FromSeconds(2));
             _ = Task.Run(() => RunDualStockWatcherLoopAsync(_workerCts.Token), _workerCts.Token);
 
             _ = Task.Run(() => RunDualStockStartupCatchUpAsync(_workerCts.Token), _workerCts.Token);
@@ -426,6 +426,8 @@ namespace SmartSembakoAssistant.Services
             {
                 return;
             }
+
+            await ProcessCloudCommandQueueAsync(cancellationToken);
 
             while (await _cloudCommandQueueTimer.WaitForNextTickAsync(cancellationToken))
             {
